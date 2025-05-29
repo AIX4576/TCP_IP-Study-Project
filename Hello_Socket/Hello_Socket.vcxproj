@@ -24,6 +24,7 @@
     <ProjectGuid>{ad7cb76e-3fff-46d0-b571-0d6916e33c59}</ProjectGuid>
     <RootNamespace>HelloSocket</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>TCP_Server</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">

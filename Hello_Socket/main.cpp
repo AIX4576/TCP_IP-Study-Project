@@ -1,11 +1,9 @@
 #include "main.h"
 
-//定义此宏，让编译器避免引入Windows早期的库，避免引起冲突
-#define WIN32_LEAN_AND_MEAN
-#include<Windows.h>
-#include<WinSock2.h>
+#define WIN32_LEAN_AND_MEAN //让编译器避免引入Windows早期的库，避免引起冲突
+#include<WS2tcpip.h>
 
-//显式告诉编译器（链接器）程序需要"ws2_32.lib"这个静态库，否则链接时找不到WSAStartup()和WSACleanup()这两个符号
+//显式告诉编译器（链接器）程序需要"ws2_32.lib"这个静态库，否则链接时找不到WSAStartup()和WSACleanup()这两个符号定义
 //或者在附加依赖项里面添加
 #pragma comment(lib,"ws2_32.lib")
 
@@ -13,11 +11,77 @@ int main()
 {
 	/*
 	在Windows下使用Windows Sockets API，必须先调用WSAStartup()初始化Winsock服务，包括加载相关的运行库等操作
-	程序退出前需要调用WSACleanup()函数
+	程序退出前需要调用WSACleanup()函数来清除相关资源
 	*/
 	WORD version = MAKEWORD(2, 2);//指定Socket版本
 	WSADATA data;
 	WSAStartup(version, &data);
+
+	//1.创建一个ipv4，数据流，tcp协议的socket套接字
+	SOCKET socket_server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+	//2.bind 绑定网络端口
+	//sockaddr_in可以转换为sockaddr，反之亦然，因为它们在内存中的布局是一致的
+	//sockaddr是一个更通用的套接字地址结构，可以表示各种类型的网络地址（如IPv4、IPv6等），而sockaddr_in专门用于IPv4地址
+	int result;
+	sockaddr_in address_server =
+	{
+		.sin_family = AF_INET,//地址族:ipv4
+		.sin_port = htons(8080),//端口号，需要从主机字节序（小端）转换成网络字节序（大端）
+		.sin_addr = INADDR_ANY,//地址，或者用 inet_pton(AF_INET, "127.0.0.1", &address_server.sin_addr); 
+	};
+	result = bind(socket_server, (sockaddr*)&address_server, sizeof(address_server));
+	if (result == SOCKET_ERROR)
+	{
+		cout << "Error: socket bind port fail" << endl;
+		closesocket(socket_server);
+		WSACleanup();
+		return -1;
+	}
+	else
+	{
+		cout << "Socket bind port succeed" << endl;
+	}
+
+	//3.listen 监听网络端口
+	result = listen(socket_server, 5);
+	if (result == SOCKET_ERROR)
+	{
+		cout << "Error: socket listen fail" << endl;
+		closesocket(socket_server);
+		WSACleanup();
+		return -1;
+	}
+	else
+	{
+		cout << "Socket listen succeed" << endl;
+	}
+
+	//4.等待接受客户端连接，accept()会阻塞直到有客户端连接进来
+	sockaddr_in address_client;
+	int address_length_client = sizeof(address_client);
+
+	SOCKET socket_client = accept(socket_server, (sockaddr*)&address_client, &address_length_client);
+	if (socket_client == INVALID_SOCKET)
+	{
+		cout << "Error: accept invalid socket" << endl;
+	}
+	else
+	{
+		char ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &address_client.sin_addr, ip_str, sizeof(ip_str));
+
+		cout << "Accept id: " << (int)socket_client << " client socket, ip = " << ip_str << endl;
+
+		//5.send 向客户端发送一条数据，向哪个客户端发送数据就要填入对应的客户端socket
+		char message[] = "Hello world!!!";
+
+		send(socket_client, message, sizeof(message), 0);
+	}
+
+	//6.关闭服务器的socket
+	this_thread::sleep_for(chrono::seconds(1));
+	closesocket(socket_server);
 
 	WSACleanup();
 
