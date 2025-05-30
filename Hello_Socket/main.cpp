@@ -1,4 +1,8 @@
-#include "main.h"
+#include<iostream>
+#include<thread>
+#include<chrono>
+
+using namespace std;
 
 #define WIN32_LEAN_AND_MEAN //让编译器避免引入Windows早期的库，避免引起冲突
 #include<WS2tcpip.h>
@@ -17,19 +21,27 @@ int main()
 	WSADATA data;
 	WSAStartup(version, &data);
 
-	//1.创建一个ipv4，数据流，tcp协议的socket套接字
+	//创建一个ipv4，数据流，tcp协议的socket套接字
 	SOCKET socket_server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (socket_server == INVALID_SOCKET)
+	{
+		cout << "Error: create server socket fail" << endl;
+		WSACleanup();
 
-	//2.bind 绑定网络端口
+		return -1;
+	}
+
+	//bind 绑定网络端口
 	//sockaddr_in可以转换为sockaddr，反之亦然，因为它们在内存中的布局是一致的
 	//sockaddr是一个更通用的套接字地址结构，可以表示各种类型的网络地址（如IPv4、IPv6等），而sockaddr_in专门用于IPv4地址
 	int result;
-	sockaddr_in address_server =
+	sockaddr_in address_server
 	{
 		.sin_family = AF_INET,//地址族:ipv4
 		.sin_port = htons(8080),//端口号，需要从主机字节序（小端）转换成网络字节序（大端）
 		.sin_addr = INADDR_ANY,//地址，或者用 inet_pton(AF_INET, "127.0.0.1", &address_server.sin_addr); 
 	};
+
 	result = bind(socket_server, (sockaddr*)&address_server, sizeof(address_server));
 	if (result == SOCKET_ERROR)
 	{
@@ -43,7 +55,7 @@ int main()
 		cout << "Socket bind port succeed" << endl;
 	}
 
-	//3.listen 监听网络端口
+	//listen 监听网络端口
 	result = listen(socket_server, 5);
 	if (result == SOCKET_ERROR)
 	{
@@ -57,7 +69,7 @@ int main()
 		cout << "Socket listen succeed" << endl;
 	}
 
-	//4.等待接受客户端连接，accept()会阻塞直到有客户端连接进来
+	//等待接受客户端连接，accept()会阻塞直到有客户端连接进来
 	sockaddr_in address_client;
 	int address_length_client = sizeof(address_client);
 
@@ -68,19 +80,32 @@ int main()
 	}
 	else
 	{
-		char ip_str[INET_ADDRSTRLEN];
+		char ip_str[INET_ADDRSTRLEN]{};
 		inet_ntop(AF_INET, &address_client.sin_addr, ip_str, sizeof(ip_str));
 
 		cout << "Accept id: " << (int)socket_client << " client socket, ip = " << ip_str << endl;
-
-		//5.send 向客户端发送一条数据，向哪个客户端发送数据就要填入对应的客户端socket
-		char message[] = "Hello world!!!";
-
-		send(socket_client, message, sizeof(message), 0);
 	}
 
-	//6.关闭服务器的socket
-	this_thread::sleep_for(chrono::seconds(1));
+	char buffer[256]{};
+	int size = 0;
+
+	while (socket_client != INVALID_SOCKET)
+	{
+		//recv 接收客户端发来的数据，对于服务器，接收哪一个客户端的数据就要填入对应客户端的socket
+		size = recv(socket_client, buffer, sizeof(buffer), 0);
+		if (size <= 0)
+		{
+			cout << "Client " << (int)socket_client << " close" << endl;
+			break;
+		}
+		else
+		{
+			//send 向客户端发送数据，对于服务器，向哪个客户端发送数据就要填入对应客户端的socket
+			send(socket_client, buffer, size, 0);
+		}
+	}
+
+	//关闭服务器的socket
 	closesocket(socket_server);
 
 	WSACleanup();
