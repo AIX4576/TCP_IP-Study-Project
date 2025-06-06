@@ -4,6 +4,8 @@
 
 using namespace std;
 
+#include"frame.h"
+
 #define WIN32_LEAN_AND_MEAN
 #include<WS2tcpip.h>
 
@@ -26,57 +28,68 @@ int main()
 	}
 
 	// connect 连接服务器
-	int result;
+	int result = SOCKET_ERROR;
 	sockaddr_in address_server{};
 
 	address_server.sin_family = AF_INET;
 	address_server.sin_port = htons(8080);
 	inet_pton(AF_INET, "192.168.137.1", &address_server.sin_addr);
 
-	result = connect(socket_client, (sockaddr*)&address_server, sizeof(address_server));
-	if (result == SOCKET_ERROR)
+	while (result == SOCKET_ERROR)
 	{
-		cout << "Error: connect to server fail" << endl;
-		closesocket(socket_client);
-		WSACleanup();
-
-		return -1;
-	}
-	else
-	{
-		cout << "Connect succeed" << endl;
-	}
-
-	int size;
-	char send_buffer[256]{};
-	char receive_buffer[256]{};
-
-	while (1)
-	{
-		memset(send_buffer, 0, sizeof(send_buffer));
-		memset(receive_buffer, 0, sizeof(receive_buffer));
-
-		cin >> send_buffer;
-		if (memcmp(send_buffer, "exit", strlen("exit")) == 0)
+		result = connect(socket_client, (sockaddr*)&address_server, sizeof(address_server));
+		if (result == SOCKET_ERROR)
 		{
-			break;
-		}
-
-		size = strnlen(send_buffer, sizeof(send_buffer));
-
-		//send 向服务器发送数据，对于客户端，与服务器建立连接后使用 send() 发送数据时填入的是自己的socket
-		send(socket_client, send_buffer, size, 0);
-
-		//recv 接受服务器发来的数据，对于客户端，与服务器建立连接后使用 recv() 接收数据时填入的是自己的socket
-		size = recv(socket_client, receive_buffer, sizeof(receive_buffer), 0);
-		if (size <= 0)
-		{
-			cout << "Server close" << endl;
-			break;
+			cout << "Error: connect to server fail" << endl;
 		}
 		else
 		{
-			cout << "Message from server is " << receive_buffer << endl;
+			cout << "Connect succeed" << endl;
+			break;
+		}
+
+		this_thread::sleep_for(chrono::seconds(5));
+	}
+
+	//send 向服务器发送数据，对于客户端，与服务器建立连接后使用 send() 发送数据时填入的是自己的socket
+	//recv 接受服务器发来的数据，对于客户端，与服务器建立连接后使用 recv() 接收数据时填入的是自己的socket
+	int size;
+	char command[32];
+
+	while (1)
+	{
+		cin >> command;
+		if (memcmp(command, "exit", strlen("exit")) == 0)
+		{
+			break;
+		}
+		else if (memcmp(command, "login", strlen("login")) == 0)
+		{
+			Frame_Login frame_login{ "hhh", "1234567890" };
+			Frame_Login_Result frame_login_result;
+
+			send(socket_client, (char*)&frame_login, sizeof(Frame_Login), 0);
+			size = recv(socket_client, (char*)&frame_login_result, sizeof(Frame_Login_Result), 0);
+			if (size > 0)
+			{
+				if (size == sizeof(Frame_Login_Result))
+				{
+					cout << "login result is " << frame_login_result.result << endl;
+				}
+				else
+				{
+					cout << "Receive data size error" << endl;
+				}
+			}
+			else
+			{
+				cout << "Server close" << endl;
+				break;
+			}
+		}
+		else
+		{
+			cout << "Error command, please input again" << endl;
 		}
 	}
 

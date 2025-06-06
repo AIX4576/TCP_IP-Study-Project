@@ -4,6 +4,8 @@
 
 using namespace std;
 
+#include"frame.h"
+
 #define WIN32_LEAN_AND_MEAN //让编译器避免引入Windows早期的库，避免引起冲突
 #include<WS2tcpip.h>
 
@@ -86,22 +88,55 @@ int main()
 		cout << "Accept id: " << (int)socket_client << " client socket, ip = " << ip_str << endl;
 	}
 
-	char buffer[256]{};
+	//recv 接收客户端发来的数据，对于服务器，接收哪一个客户端的数据就要填入对应客户端的socket
+	//send 向客户端发送数据，对于服务器，向哪个客户端发送数据就要填入对应客户端的socket
+	Frame_Header frame_header;
 	int size = 0;
 
 	while (socket_client != INVALID_SOCKET)
 	{
-		//recv 接收客户端发来的数据，对于服务器，接收哪一个客户端的数据就要填入对应客户端的socket
-		size = recv(socket_client, buffer, sizeof(buffer), 0);
-		if (size <= 0)
+		if (recv(socket_client, (char*)&frame_header.start_4bytes.bytes[0], 1, 0) > 0)
 		{
-			cout << "Client " << (int)socket_client << " close" << endl;
-			break;
+			if (frame_header.start_4bytes.bytes[0] == Start_Bytes0)
+			{
+				if (recv(socket_client, (char*)&frame_header.start_4bytes.bytes[1], 3, MSG_PEEK) == 3)
+				{
+					if ((frame_header.start_4bytes.bytes[1] == Start_Bytes1) &&
+						(frame_header.start_4bytes.bytes[2] == Start_Bytes2) &&
+						(frame_header.start_4bytes.bytes[3] == Start_Bytes3))
+					{
+						if (recv(socket_client, (char*)&frame_header.start_4bytes.bytes[1], sizeof(Frame_Header) - 1, 0) == (sizeof(Frame_Header) - 1))
+						{
+							switch (frame_header.command)
+							{
+							case CMD_Login:
+							{
+								if (frame_header.frame_length == sizeof(Frame_Login))
+								{
+									Frame_Login frame_login;
+									if (recv(socket_client, (char*)&frame_login.user_name, sizeof(Frame_Login) - sizeof(Frame_Header), 0) == (sizeof(Frame_Login) - sizeof(Frame_Header)))
+									{
+										Frame_Login_Result frame_login_result;
+										if ((frame_login.password[0] && frame_login.user_name[0]) == 0)
+										{
+											frame_login_result.result = -1;
+										}
+										send(socket_client, (char*)&frame_login_result, sizeof(Frame_Login_Result), 0);
+									}
+								}
+							}
+							break;
+							default:break;
+							}
+						}
+					}
+				}
+			}
 		}
 		else
 		{
-			//send 向客户端发送数据，对于服务器，向哪个客户端发送数据就要填入对应客户端的socket
-			send(socket_client, buffer, size, 0);
+			cout << "Client close" << endl;
+			break;
 		}
 	}
 
