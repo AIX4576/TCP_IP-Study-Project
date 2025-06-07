@@ -105,7 +105,8 @@ int main()
 						(frame_header.start_4bytes.bytes[2] == Start_Bytes2) &&
 						(frame_header.start_4bytes.bytes[3] == Start_Bytes3))
 					{
-						if (recv(socket_client, (char*)&frame_header.start_4bytes.bytes[1], sizeof(Frame_Header) - 1, 0) == (sizeof(Frame_Header) - 1))
+						size = sizeof(Frame_Header) - 1;
+						if (recv(socket_client, (char*)&frame_header.start_4bytes.bytes[1], size, 0) == size)
 						{
 							switch (frame_header.command)
 							{
@@ -114,9 +115,10 @@ int main()
 								if (frame_header.frame_length == sizeof(Frame_Login))
 								{
 									Frame_Login frame_login;
-									if (recv(socket_client, (char*)&frame_login.user_name, sizeof(Frame_Login) - sizeof(Frame_Header), 0) == (sizeof(Frame_Login) - sizeof(Frame_Header)))
+									size = sizeof(Frame_Login) - sizeof(Frame_Header);
+									if (recv(socket_client, (char*)&frame_login + sizeof(Frame_Header), size, 0) == size)
 									{
-										Frame_Login_Result frame_login_result;
+										Frame_Login_Result frame_login_result{ 0 };
 										if ((frame_login.password[0] && frame_login.user_name[0]) == 0)
 										{
 											frame_login_result.result = -1;
