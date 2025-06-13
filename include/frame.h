@@ -1,5 +1,7 @@
 #pragma once
 
+#define Buffer_Size 1024
+
 #define Start_Bytes0 0xaa
 #define Start_Bytes1 0xbb
 #define Start_Bytes2 0xcc

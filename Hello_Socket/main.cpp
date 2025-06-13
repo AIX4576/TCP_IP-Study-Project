@@ -90,49 +90,70 @@ int main()
 
 	//recv 接收客户端发来的数据，对于服务器，接收哪一个客户端的数据就要填入对应客户端的socket
 	//send 向客户端发送数据，对于服务器，向哪个客户端发送数据就要填入对应客户端的socket
-	Frame_Header frame_header;
+	char buffer[Buffer_Size]{};
+	Frame_Header* frame_header = (Frame_Header*)buffer;
 	int size = 0;
 
 	while (socket_client != INVALID_SOCKET)
 	{
-		if (recv(socket_client, (char*)&frame_header.start_4bytes.bytes[0], 1, 0) > 0)
+		size = recv(socket_client, buffer, sizeof(Frame_Header), MSG_PEEK);
+		if (size > 0)
 		{
-			if (frame_header.start_4bytes.bytes[0] == Start_Bytes0)
+			if (size != sizeof(Frame_Header))
 			{
-				if (recv(socket_client, (char*)&frame_header.start_4bytes.bytes[1], 3, MSG_PEEK) == 3)
+				continue;
+			}
+
+			if (frame_header->start_4bytes.bytes4 == Start_4Bytes)
+			{
+				recv(socket_client, buffer, sizeof(Frame_Header), 0);
+			}
+			else
+			{
+				recv(socket_client, buffer, 1, 0);
+				continue;
+			}
+
+			if (frame_header->frame_length > Buffer_Size)
+			{
+				continue;
+			}
+
+			size = sizeof(Frame_Header);
+			while (size < frame_header->frame_length)
+			{
+				int receive_size = recv(socket_client, &buffer[size], frame_header->frame_length - size, 0);
+				if (receive_size > 0)
 				{
-					if ((frame_header.start_4bytes.bytes[1] == Start_Bytes1) &&
-						(frame_header.start_4bytes.bytes[2] == Start_Bytes2) &&
-						(frame_header.start_4bytes.bytes[3] == Start_Bytes3))
-					{
-						size = sizeof(Frame_Header) - 1;
-						if (recv(socket_client, (char*)&frame_header.start_4bytes.bytes[1], size, 0) == size)
-						{
-							switch (frame_header.command)
-							{
-							case CMD_Login:
-							{
-								if (frame_header.frame_length == sizeof(Frame_Login))
-								{
-									Frame_Login frame_login;
-									size = sizeof(Frame_Login) - sizeof(Frame_Header);
-									if (recv(socket_client, (char*)&frame_login + sizeof(Frame_Header), size, 0) == size)
-									{
-										Frame_Login_Result frame_login_result{ 0 };
-										if ((frame_login.password[0] && frame_login.user_name[0]) == 0)
-										{
-											frame_login_result.result = -1;
-										}
-										send(socket_client, (char*)&frame_login_result, sizeof(Frame_Login_Result), 0);
-									}
-								}
-							}
-							break;
-							default:break;
-							}
-						}
-					}
+					size += receive_size;
 				}
+				else
+				{
+					break;
+				}
+			}
+			if (size < frame_header->frame_length)
+			{
+				continue;
+			}
+
+			switch (frame_header->command)
+			{
+			case CMD_Login:
+			{
+				if (frame_header->frame_length == sizeof(Frame_Login))
+				{
+					Frame_Login* frame_login = (Frame_Login*)buffer;
+					Frame_Login_Result frame_login_result{ 0 };
+					if ((frame_login->password[0] && frame_login->user_name[0]) == 0)
+					{
+						frame_login_result.result = -1;
+					}
+					send(socket_client, (char*)&frame_login_result, sizeof(Frame_Login_Result), 0);
+				}
+			}
+			break;
+			default:break;
 			}
 		}
 		else
