@@ -1,21 +1,28 @@
 #include<iostream>
 #include<thread>
 #include<chrono>
-
 using namespace std;
 
-#include"frame.h"
-
-#define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN //让编译器避免引入Windows早期的库，避免引起冲突。必须先定义这个宏再包含 WS2tcpip.h 
 #include<WS2tcpip.h>
-
+//显式告诉编译器（链接器）程序需要"ws2_32.lib"这个静态库，否则链接时找不到WSAStartup()和WSACleanup()这两个符号定义
+//或者在附加依赖项里面添加
 #pragma comment(lib,"ws2_32.lib")
+
+#include"frame.h"
 
 int main()
 {
 	WORD version = MAKEWORD(2, 2);//指定Socket版本
 	WSADATA data;
-	WSAStartup(version, &data);
+	int result = 0;
+	result = WSAStartup(version, &data);
+	if (result != NO_ERROR)
+	{
+		cout << "WSAStartup fail" << endl;
+
+		return -1;
+	}
 
 	//创建一个ipv4，数据流，tcp协议的socket套接字
 	SOCKET socket_client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -28,7 +35,7 @@ int main()
 	}
 
 	// connect 连接服务器
-	int result = SOCKET_ERROR;
+	result = SOCKET_ERROR;
 	sockaddr_in address_server{};
 
 	address_server.sin_family = AF_INET;

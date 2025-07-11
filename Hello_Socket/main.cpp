@@ -1,17 +1,15 @@
 #include<iostream>
 #include<thread>
 #include<chrono>
-
 using namespace std;
 
-#include"frame.h"
-
-#define WIN32_LEAN_AND_MEAN //让编译器避免引入Windows早期的库，避免引起冲突
+#define WIN32_LEAN_AND_MEAN //让编译器避免引入Windows早期的库，避免引起冲突。必须先定义这个宏再包含 WS2tcpip.h 
 #include<WS2tcpip.h>
-
 //显式告诉编译器（链接器）程序需要"ws2_32.lib"这个静态库，否则链接时找不到WSAStartup()和WSACleanup()这两个符号定义
 //或者在附加依赖项里面添加
 #pragma comment(lib,"ws2_32.lib")
+
+#include"frame.h"
 
 int main()
 {
@@ -21,7 +19,14 @@ int main()
 	*/
 	WORD version = MAKEWORD(2, 2);//指定Socket版本
 	WSADATA data;
-	WSAStartup(version, &data);
+	int result = 0;
+	result = WSAStartup(version, &data);
+	if (result != NO_ERROR)
+	{
+		cout << "WSAStartup fail" << endl;
+
+		return -1;
+	}
 
 	//创建一个ipv4，数据流，tcp协议的socket套接字
 	SOCKET socket_server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -36,7 +41,6 @@ int main()
 	//bind 绑定网络端口
 	//sockaddr_in可以转换为sockaddr，反之亦然，因为它们在内存中的布局是一致的
 	//sockaddr是一个更通用的套接字地址结构，可以表示各种类型的网络地址（如IPv4、IPv6等），而sockaddr_in专门用于IPv4地址
-	int result;
 	sockaddr_in address_server
 	{
 		.sin_family = AF_INET,//地址族:ipv4
@@ -90,7 +94,7 @@ int main()
 
 	//recv 接收客户端发来的数据，对于服务器，接收哪一个客户端的数据就要填入对应客户端的socket
 	//send 向客户端发送数据，对于服务器，向哪个客户端发送数据就要填入对应客户端的socket
-	char buffer[Buffer_Size]{};
+	char buffer[Max_Frame_Size]{};
 	Frame_Header* frame_header = (Frame_Header*)buffer;
 	int size = 0;
 
@@ -114,7 +118,7 @@ int main()
 				continue;
 			}
 
-			if (frame_header->frame_length > Buffer_Size)
+			if (frame_header->frame_length > Max_Frame_Size)
 			{
 				continue;
 			}
