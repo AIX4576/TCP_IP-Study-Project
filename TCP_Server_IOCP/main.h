@@ -6,6 +6,7 @@
 #include<string>
 #include<unordered_map>
 #include<mutex>
+#include<atomic>
 
 using namespace std;
 
@@ -16,7 +17,7 @@ using namespace std;
 #pragma comment(lib, "mswsock.lib") // 链接扩展套接字库
 
 #define Worker_Threads_Number 4
-#define Max_Clients_Number 64
+#define Max_Clients_Number 8
 
 #define Receive_Data_Length 0
 #define Local_Address_Length (sizeof(SOCKADDR_IN) + 16)
@@ -39,14 +40,91 @@ enum Deliver_Event
 	Event_Receive,
 };
 
-struct Socket_Event
+struct Event_handle
 {
-	OVERLAPPED overlapped{};
+	OVERLAPPED overlapped{};//必须 清零 OVERLAPPED 结构，否则可能导致未定义行为
 	SOCKET socket;
 	Deliver_Event event;
+	DWORD flag{};//WSARecv()要用到，默认是0
+	WSABUF buffer{};//WSARecv()要用到
+	static atomic<long long> next_id;
 
-	Socket_Event() : socket(INVALID_SOCKET), event(Event_None) {};
-	Socket_Event(SOCKET socket, Deliver_Event event) : socket(socket), event(event) {};
+	Event_handle(bool allocate_buffer) : socket(INVALID_SOCKET), event(Event_None)
+	{
+		if(allocate_buffer)
+		{
+			buffer.buf = new char[Client_Buffer_Size] {};
+			buffer.len = buffer.buf ? Client_Buffer_Size : 0;
+		}
+
+		id = next_id.fetch_add(1, memory_order_release);
+	}
+	Event_handle(bool allocate_buffer, SOCKET socket, Deliver_Event event) : socket(socket), event(event)
+	{
+		if (allocate_buffer)
+		{
+			buffer.buf = new char[Client_Buffer_Size] {};
+			buffer.len = buffer.buf ? Client_Buffer_Size : 0;
+		}
+
+		id = next_id.fetch_add(1, memory_order_release);
+	}
+	Event_handle(Event_handle&) = delete;
+	Event_handle& operator=(const Event_handle&) = delete;
+	Event_handle(Event_handle&& other) noexcept
+	{
+		//移动构造函数，将自身资源初始化为0后交换
+		if (this != &other)
+		{
+			socket = INVALID_SOCKET;
+			event = Event_None;
+
+			swap(overlapped, other.overlapped);
+			swap(socket, other.socket);
+			swap(event, other.event);
+			swap(flag, other.flag);
+			swap(buffer, other.buffer);
+			swap(id, other.id);
+		}
+	}
+	Event_handle& operator=(Event_handle&& other) noexcept
+	{
+		//移动赋值函数，将自身资源释放后置0，然后交换
+		if (this != &other)
+		{
+			if (buffer.buf)
+			{
+				delete[] buffer.buf;
+				buffer.buf = NULL;
+				buffer.len = 0;
+			}
+
+			swap(overlapped, other.overlapped);
+			swap(socket, other.socket);
+			swap(event, other.event);
+			swap(flag, other.flag);
+			swap(buffer, other.buffer);
+			swap(id, other.id);
+		}
+
+		return *this;
+	}
+	~Event_handle()
+	{
+		if (buffer.buf)
+		{
+			delete[] buffer.buf;
+			buffer.buf = NULL;
+			buffer.len = 0;
+		}
+	}
+	long long Get_id()
+	{
+		return id;
+	}
+
+private:
+	long long id{};
 };
 
 struct Client_Handle
@@ -55,8 +133,8 @@ struct Client_Handle
 	Socket_Status socket_status;
 	string ip;
 	uint16_t port{};
-	WSABUF buffer{};
 	uint8_t output_buffer[Receive_Data_Length + Local_Address_Length + Remote_Address_Length]{};// 地址 + 数据
+	unordered_map<long long, Event_handle> receive_events;
 
 	Client_Handle() :socket(INVALID_SOCKET), socket_status(Socket_Invalid)
 	{
@@ -64,8 +142,6 @@ struct Client_Handle
 		if (socket != INVALID_SOCKET)
 		{
 			socket_status = Socket_Disconnected;
-			buffer.buf = new char[Client_Buffer_Size] {};
-			buffer.len = buffer.buf ? Client_Buffer_Size : 0;
 		}
 	}
 	Client_Handle(Client_Handle&) = delete;
@@ -82,8 +158,8 @@ struct Client_Handle
 			swap(socket_status, other.socket_status);
 			swap(ip, other.ip);
 			swap(port, other.port);
-			swap(buffer, other.buffer);
 			memcpy(output_buffer, other.output_buffer, sizeof(output_buffer));
+			swap(receive_events, other.receive_events);
 		}
 	}
 	Client_Handle& operator=(Client_Handle&& other) noexcept
@@ -97,19 +173,16 @@ struct Client_Handle
 				socket = INVALID_SOCKET;
 				socket_status = Socket_Invalid;
 			}
-			if (buffer.buf)
-			{
-				delete[] buffer.buf;
-				buffer.buf = NULL;
-				buffer.len = 0;
-			}
+
+			ip.clear();
+			receive_events.clear();
 
 			swap(socket, other.socket);
 			swap(socket_status, other.socket_status);
 			swap(ip, other.ip);
 			swap(port, other.port);
-			swap(buffer, other.buffer);
 			memcpy(output_buffer, other.output_buffer, sizeof(output_buffer));
+			swap(receive_events, other.receive_events);
 		}
 
 		return *this;
@@ -121,12 +194,6 @@ struct Client_Handle
 			closesocket(socket);
 			socket = INVALID_SOCKET;
 			socket_status = Socket_Invalid;
-		}
-		if (buffer.buf)
-		{
-			delete[] buffer.buf;
-			buffer.buf = NULL;
-			buffer.len = 0;
 		}
 	}
 	void Connect_Deal()
@@ -152,6 +219,7 @@ class Server_Handle
 {
 public:
 	unordered_map<SOCKET, Client_Handle> client_handles;
+	unordered_map<long long, Event_handle> accept_connect_disconnect_events;
 	mutex client_handles_mutex;
 
 	Server_Handle();
@@ -171,6 +239,7 @@ public:
 			swap(socket, other.socket);
 			swap(iocp, other.iocp);
 			swap(client_handles, other.client_handles);
+			swap(accept_connect_disconnect_events, other.accept_connect_disconnect_events);
 		}
 	}
 	Server_Handle& operator=(Server_Handle&& other) noexcept
@@ -190,12 +259,14 @@ public:
 			}
 
 			client_handles.clear();
+			accept_connect_disconnect_events.clear();
 			initialize_flag = FALSE;
 
 			swap(initialize_flag, other.initialize_flag);
 			swap(socket, other.socket);
 			swap(iocp, other.iocp);
 			swap(client_handles, other.client_handles);
+			swap(accept_connect_disconnect_events, other.accept_connect_disconnect_events);
 		}
 
 		return *this;
