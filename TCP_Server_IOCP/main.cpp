@@ -43,6 +43,8 @@ int main()
 		}
 	}
 
+	server_handle.Close_Socket();
+	this_thread::sleep_for(chrono::milliseconds(500));
 	run_flag = FALSE;
 
 	for (thread& item : thread_pool)
@@ -123,29 +125,38 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	for (int i = 0; i < Worker_Threads_Number; i++)
 	{
 		Client_Handle temp_client;
-		Event_handle temp_event{ FALSE, temp_client.socket ,Event_Accept_Connect };
-		SOCKET client_socket = temp_client.socket;
-		long long event_id = temp_event.Get_id();
-
-		if (temp_client.socket != INVALID_SOCKET)
+		Event_handle* pEvent = new Event_handle{ FALSE, temp_client.socket ,Event_Accept_Connect };
+		if (pEvent == NULL)
 		{
-			lock_guard<mutex> lock(client_handles_mutex);
+			continue;
+		}
+		if (temp_client.socket == INVALID_SOCKET)
+		{
+			delete pEvent;
+			continue;
+		}
 
-			client_handles.insert({ temp_client.socket,move(temp_client) });
-			accept_connect_disconnect_events.insert({ temp_event.Get_id(), move(temp_event) });
+		lock_guard<mutex> lock(client_handles_mutex);
+		client_handles.insert({ temp_client.socket,move(temp_client) });
 
-			Client_Handle& client_handle = client_handles.at(client_socket);
-			Event_handle& accept_connect_event = accept_connect_disconnect_events.at(event_id);
+		Client_Handle& client_handle = client_handles.at(pEvent->socket);
 
-			AcceptEx(
-				socket,
-				client_handle.socket,
-				client_handle.output_buffer,
-				Receive_Data_Length,// 不立即收数据
-				Local_Address_Length,
-				Remote_Address_Length,
-				NULL,// 不需要立即返回字节数
-				(LPOVERLAPPED)&accept_connect_event);
+		bool ret = FALSE;
+		int error = 0;
+		ret = AcceptEx(
+			socket,
+			client_handle.socket,
+			client_handle.output_buffer,
+			Receive_Data_Length,// 不立即收数据
+			Local_Address_Length,
+			Remote_Address_Length,
+			NULL,// 不需要立即返回字节数
+			(LPOVERLAPPED)pEvent);
+
+		error = WSAGetLastError();
+		if ((ret == FALSE) && (error != WSA_IO_PENDING))
+		{
+			delete pEvent;
 		}
 	}
 
@@ -179,19 +190,16 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 			if (completion_key == (ULONG_PTR)&server_handle)
 			{
 				Event_handle* pEvent = (Event_handle*)pOverlapped;
-				auto it1 = server_handle.client_handles.find(pEvent->socket);
+				auto it = server_handle.client_handles.find(pEvent->socket);
 
-				if (it1 == server_handle.client_handles.end())
+				if (it == server_handle.client_handles.end())
 				{
-					if ((pEvent->event == Event_Accept_Connect) || (pEvent->event == Event_Disconnect))
-					{
-						server_handle.accept_connect_disconnect_events.erase(pEvent->Get_id());
-					}
+					delete pEvent;
 
 					continue;
 				}
 
-				Client_Handle& client_handle = it1->second;
+				Client_Handle& client_handle = it->second;
 
 				switch (pEvent->event)
 				{
@@ -201,33 +209,55 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 
 					cout << "client [" << (int)client_handle.socket << "] connected, ip is " << client_handle.ip << ", port is " << client_handle.port << endl;
 
-					//将新连接的 client socket 与 iocp 绑定，然后投递异步recv请求
+					//将新连接的 client socket 与 iocp 绑定，然后投递异步recv请求，投递多个
 					HANDLE iocp = CreateIoCompletionPort((HANDLE)client_handle.socket, server_handle.Get_IOCP(), (ULONG_PTR)&server_handle, 0);
-					Event_handle temp_event{ TRUE, client_handle.socket, Event_Receive };
-					long long event_id = temp_event.Get_id();
-
-					if (iocp && temp_event.buffer.buf)
+					if (iocp)
 					{
-						client_handle.receive_events.insert({ temp_event.Get_id() ,move(temp_event) });
+						uint32_t count = 0;
 
-						Event_handle& receive_event = client_handle.receive_events.at(event_id);
-
-						int ret = 0;
-						int error = 0;
-						ret = WSARecv(
-							client_handle.socket,
-							&receive_event.buffer,				//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
-							1,									//上面数组的长度，通常为 1
-							NULL,								//实际接收到的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
-							&receive_event.flag,				//标志位（如 MSG_PARTIAL），通常设为 0
-							(LPWSAOVERLAPPED)&receive_event,
-							NULL								//接收完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
-						);
-
-						error = WSAGetLastError();
-						if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
+						for (int i = 0; i < Worker_Threads_Number; i++)
 						{
-							cout << "Error: WSARecv() error code is " << error << endl;
+							Event_handle* pEvent1 = new Event_handle{ TRUE, client_handle.socket, Event_Receive };
+
+							if (pEvent1 == NULL)
+							{
+								continue;
+							}
+							if (pEvent1->buffer.buf == NULL)
+							{
+								delete pEvent1;
+								continue;
+							}
+
+							int ret = 0;
+							int error = 0;
+							ret = WSARecv(
+								client_handle.socket,
+								&pEvent1->buffer,					//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
+								1,									//上面数组的长度，通常为 1
+								NULL,								//实际接收到的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
+								&pEvent1->flag,						//标志位（如 MSG_PARTIAL），通常设为 0
+								(LPWSAOVERLAPPED)pEvent1,
+								NULL								//接收完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
+							);
+
+							error = WSAGetLastError();
+							if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
+							{
+								cout << "Error: WSARecv() error code is " << error << endl;
+
+								delete pEvent1;
+							}
+							else
+							{
+								count++;
+							}
+						}
+
+						if (count == 0)
+						{
+							lock_guard<mutex> lock{ server_handle.client_handles_mutex };
+							server_handle.client_handles.erase(client_handle.socket);
 						}
 					}
 					else
@@ -248,22 +278,35 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 							pEvent->socket = temp_client.socket;
 							server_handle.client_handles.insert({ temp_client.socket,move(temp_client) });
 
-							Client_Handle& client_handle = server_handle.client_handles.at(pEvent->socket);
+							Client_Handle& client_handle1 = server_handle.client_handles.at(pEvent->socket);
 
-							AcceptEx(
+							bool ret = FALSE;
+							int error = 0;
+							ret = AcceptEx(
 								server_handle.Get_Socket_Server(),
-								client_handle.socket,
-								client_handle.output_buffer,
+								client_handle1.socket,
+								client_handle1.output_buffer,
 								Receive_Data_Length,// 不立即收数据
 								Local_Address_Length,
 								Remote_Address_Length,
 								NULL,// 不需要立即返回字节数
 								(LPOVERLAPPED)pEvent);
+
+							error = WSAGetLastError();
+							if ((ret == FALSE) && (error != WSA_IO_PENDING))
+							{
+								server_handle.client_handles.erase(client_handle1.socket);
+								delete pEvent;
+							}
 						}
 						else
 						{
-							server_handle.accept_connect_disconnect_events.erase(pEvent->Get_id());
+							delete pEvent;
 						}
+					}
+					else
+					{
+						delete pEvent;
 					}
 				}
 				break;
@@ -274,7 +317,9 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 					//复用该socket，继续投递异步accept请求(服务器使用DisconnectEx()主动断开socket连接才能复用)
 					pEvent->event = Event_Accept_Connect;
 
-					AcceptEx(
+					bool ret = FALSE;
+					int error = 0;
+					ret = AcceptEx(
 						server_handle.Get_Socket_Server(),
 						client_handle.socket,
 						client_handle.output_buffer,
@@ -283,6 +328,17 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 						Remote_Address_Length,
 						NULL,// 不需要立即返回字节数
 						(LPOVERLAPPED)pEvent);
+
+					if ((ret == FALSE) && (error != WSA_IO_PENDING))
+					{
+						server_handle.client_handles.erase(client_handle.socket);
+						delete pEvent;
+					}
+				}
+				break;
+				case Event_Send:
+				{
+
 				}
 				break;
 				case Event_Receive:
@@ -306,6 +362,8 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 					if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 					{
 						cout << "Error: WSARecv() error code is " << error << endl;
+
+						delete pEvent;
 					}
 				}
 				break;
@@ -313,6 +371,8 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 				{
 					lock_guard<mutex> lock{ server_handle.client_handles_mutex };
 					server_handle.client_handles.erase(client_handle.socket);
+
+					delete pEvent;
 				}
 				break;
 				}
@@ -331,19 +391,21 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 				DWORD error2 = WSAGetLastError();
 				Event_handle* pEvent = (Event_handle*)pOverlapped;
 
-				if (((error1 == ERROR_NETNAME_DELETED) && (bytes_transferred == 0)) ||
-					(error2 == WSAECONNRESET) ||
-					(error2 == WSAECONNABORTED))
+				if ((bytes_transferred == 0) &&
+					((error1 == ERROR_OPERATION_ABORTED) || (error1 == ERROR_NETNAME_DELETED) || (error1 == ERROR_SUCCESS) || (error2 == WSAECONNRESET)))
 				{
-					cout << "client socket [" << (int)pEvent->socket << "] close" << endl;
+					auto it1 = server_handle.client_handles.find(pEvent->socket);
+					if ((it1 != server_handle.client_handles.end()) && (pEvent->event != Event_Accept_Connect))
+					{
+						//当socket断开连接时，所有未完成的异步操作都会被系统强制完成，并通过完成端口（IOCP）机制通知应用程序
+						cout << "client socket [" << (int)pEvent->socket << "] close" << endl;
 
-					lock_guard<mutex> lock{ server_handle.client_handles_mutex };
-					server_handle.client_handles.erase(pEvent->socket);
+						lock_guard<mutex> lock{ server_handle.client_handles_mutex };
+						server_handle.client_handles.erase(pEvent->socket);
+					}
 				}
-				else
-				{
-					server_handle.accept_connect_disconnect_events.erase(pEvent->Get_id());
-				}
+				
+				delete pEvent;
 			}
 		}
 	}
