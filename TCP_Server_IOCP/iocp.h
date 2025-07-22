@@ -46,25 +46,25 @@ struct Event_handle
 	SOCKET socket;
 	Deliver_Event event;
 	DWORD flag{};//WSARecv()要用到，默认是0
-	WSABUF buffer{};//WSARecv()要用到
+	WSABUF buffer{};//WSARecv()和WSASend()要用到
 	static atomic<long long> next_id;
 
-	Event_handle(bool allocate_buffer) : socket(INVALID_SOCKET), event(Event_None)
+	Event_handle(bool allocate_buffer, uint32_t buffer_size = Client_Buffer_Size) : socket(INVALID_SOCKET), event(Event_None)
 	{
 		if(allocate_buffer)
 		{
-			buffer.buf = new char[Client_Buffer_Size] {};
-			buffer.len = buffer.buf ? Client_Buffer_Size : 0;
+			buffer.buf = new char[buffer_size] {};
+			buffer.len = buffer.buf ? buffer_size : 0;
 		}
 
 		id = next_id.fetch_add(1, memory_order_release);
 	}
-	Event_handle(bool allocate_buffer, SOCKET socket, Deliver_Event event) : socket(socket), event(event)
+	Event_handle(SOCKET socket, Deliver_Event event, bool allocate_buffer, uint32_t buffer_size = Client_Buffer_Size) : socket(socket), event(event)
 	{
 		if (allocate_buffer)
 		{
-			buffer.buf = new char[Client_Buffer_Size] {};
-			buffer.len = buffer.buf ? Client_Buffer_Size : 0;
+			buffer.buf = new char[buffer_size] {};
+			buffer.len = buffer.buf ? buffer_size : 0;
 		}
 
 		id = next_id.fetch_add(1, memory_order_release);
