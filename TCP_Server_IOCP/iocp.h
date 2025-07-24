@@ -4,6 +4,7 @@
 #include<chrono>
 #include<list>
 #include<string>
+#include<map>
 #include<unordered_map>
 #include<mutex>
 #include<atomic>
@@ -47,27 +48,26 @@ struct Event_handle
 	Deliver_Event event;
 	DWORD flag{};//WSARecv()要用到，默认是0
 	WSABUF buffer{};//WSARecv()和WSASend()要用到
-	static atomic<long long> next_id;
 
-	Event_handle(bool allocate_buffer, uint32_t buffer_size = Client_Buffer_Size) : socket(INVALID_SOCKET), event(Event_None)
+	Event_handle(bool allocate_buffer, size_t buffer_size = Client_Buffer_Size, size_t event_id = 0) : socket(INVALID_SOCKET), event(Event_None)
 	{
 		if(allocate_buffer)
 		{
-			buffer.buf = new char[buffer_size] {};
-			buffer.len = buffer.buf ? buffer_size : 0;
+			buffer.buf = new char[(ULONG)buffer_size] {};
+			buffer.len = buffer.buf ? (ULONG)buffer_size : 0;
 		}
 
-		id = next_id.fetch_add(1, memory_order_release);
+		id = event_id;
 	}
-	Event_handle(SOCKET socket, Deliver_Event event, bool allocate_buffer, uint32_t buffer_size = Client_Buffer_Size) : socket(socket), event(event)
+	Event_handle(SOCKET socket, Deliver_Event event, bool allocate_buffer, size_t buffer_size = Client_Buffer_Size, size_t event_id = 0) : socket(socket), event(event)
 	{
 		if (allocate_buffer)
 		{
-			buffer.buf = new char[buffer_size] {};
-			buffer.len = buffer.buf ? buffer_size : 0;
+			buffer.buf = new char[(ULONG)buffer_size] {};
+			buffer.len = buffer.buf ? (ULONG)buffer_size : 0;
 		}
 
-		id = next_id.fetch_add(1, memory_order_release);
+		id = event_id;
 	}
 	Event_handle(Event_handle&) = delete;
 	Event_handle& operator=(const Event_handle&) = delete;
@@ -118,13 +118,17 @@ struct Event_handle
 			buffer.len = 0;
 		}
 	}
-	long long Get_id()
+	size_t Get_id() const
 	{
 		return id;
 	}
+	void Set_id(size_t event_id)
+	{
+		id = event_id;
+	}
 
 private:
-	long long id{};
+	size_t id{};
 };
 
 struct Client_Handle
@@ -158,6 +162,8 @@ struct Client_Handle
 			swap(ip, other.ip);
 			swap(port, other.port);
 			memcpy(output_buffer, other.output_buffer, sizeof(output_buffer));
+			swap(receive_data, other.receive_data);
+			swap(total_receive_data_size, other.total_receive_data_size);
 		}
 	}
 	Client_Handle& operator=(Client_Handle&& other) noexcept
@@ -174,12 +180,15 @@ struct Client_Handle
 			}
 
 			ip.clear();
+			receive_data.clear();
 
 			swap(socket, other.socket);
 			swap(socket_status, other.socket_status);
 			swap(ip, other.ip);
 			swap(port, other.port);
 			memcpy(output_buffer, other.output_buffer, sizeof(output_buffer));
+			swap(receive_data, other.receive_data);
+			swap(total_receive_data_size, other.total_receive_data_size);
 		}
 
 		return *this;
@@ -211,6 +220,83 @@ struct Client_Handle
 	{
 		socket_status = Socket_Disconnected;
 	}
+	size_t Make_Receive_Event_id()
+	{
+		return receive_event_count.fetch_add(1, memory_order_release);
+	}
+	size_t Get_Total_Receive_Data_Size() const
+	{
+		return total_receive_data_size;
+	}
+	bool Insert_To_Receive_Data(Event_handle* event, uint32_t data_size)
+	{
+		if (event == NULL)
+		{
+			return FALSE;
+		}
+		if ((event->event != Event_Receive) || (event->buffer.buf == NULL))
+		{
+			return FALSE;
+		}
+
+		// 循环尝试获取锁，test_and_set会原子地将flag设为true，并返回操作前的值
+		while (flag.test_and_set(memory_order_acquire))
+		{
+			this_thread::yield();
+		}
+
+		string data(event->buffer.buf, min(event->buffer.len, data_size));
+		total_receive_data_size += data.size();
+		receive_data.emplace(event->Get_id(), move(data));
+
+		flag.clear(memory_order_release);
+
+		return TRUE;
+	}
+	string Peek_All_Receive_Data()
+	{
+		string data;
+
+		while (flag.test_and_set(memory_order_acquire))
+		{
+			this_thread::yield();
+		}
+
+		for (auto& it : receive_data)
+		{
+			data += it.second;
+		}
+
+		flag.clear(memory_order_release);
+
+		return data;
+	}
+	string Get_All_Receive_Data()
+	{
+		string data;
+
+		while (flag.test_and_set(memory_order_acquire))
+		{
+			this_thread::yield();
+		}
+
+		for (auto& it : receive_data)
+		{
+			data += it.second;
+		}
+		receive_data.clear();
+		total_receive_data_size = 0;
+
+		flag.clear(memory_order_release);
+
+		return data;
+	}
+
+private:
+	atomic_flag flag{};// 最简单的原子类型，仅支持 test_and_set 和 clear 操作
+	atomic<size_t> receive_event_count{};
+	map<size_t, string> receive_data;
+	size_t total_receive_data_size{};
 };
 
 class Server_Handle
@@ -283,15 +369,15 @@ public:
 		initialize_flag = FALSE;
 	}
 
-	bool Get_Initialize_Flag()
+	bool Get_Initialize_Flag() const
 	{
 		return initialize_flag;
 	}
-	SOCKET Get_Socket_Server()
+	SOCKET Get_Socket_Server() const
 	{
 		return socket;
 	}
-	HANDLE Get_IOCP()
+	HANDLE Get_IOCP() const
 	{
 		return iocp;
 	}

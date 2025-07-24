@@ -1,7 +1,5 @@
 #include"iocp.h"
 
-atomic<long long> Event_handle::next_id = 0;
-
 Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_flag(FALSE)
 {
 	//创建一个支持重叠IO的TCP套接字, WSASocket()函数是Windows系统专用的,socket()函数是跨平台的
@@ -79,7 +77,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 		}
 
 		lock_guard<mutex> lock(client_handles_mutex);
-		client_handles.insert({ temp_client.socket,move(temp_client) });
+		client_handles.emplace(temp_client.socket, move(temp_client));
 
 		Client_Handle& client_handle = client_handles.at(pEvent->socket);
 
@@ -162,7 +160,13 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 
 					for (int i = 0; i < Worker_Threads_Number; i++)
 					{
-						Event_handle* pEvent1 = new Event_handle{ client_handle.socket, Event_Receive,TRUE };
+						Event_handle* pEvent1 = new Event_handle
+						{ client_handle.socket,
+							Event_Receive,
+							TRUE,
+							Client_Buffer_Size,
+							client_handle.Make_Receive_Event_id()
+						};
 						if (pEvent1 == NULL)
 						{
 							continue;
@@ -220,7 +224,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 						lock_guard<mutex> lock(server_handle.client_handles_mutex);
 
 						pEvent->socket = temp_client.socket;
-						server_handle.client_handles.insert({ temp_client.socket,move(temp_client) });
+						server_handle.client_handles.emplace(temp_client.socket, move(temp_client));
 
 						Client_Handle& client_handle1 = server_handle.client_handles.at(pEvent->socket);
 
@@ -287,6 +291,11 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 			break;
 			case Event_Receive:
 			{
+				//将数据存入receive_data中
+				client_handle.Insert_To_Receive_Data(pEvent, bytes_transferred);
+
+				pEvent->Set_id(client_handle.Make_Receive_Event_id());
+
 				//继续投递异步recv请求
 				int ret = 0;
 				int error = 0;
@@ -308,29 +317,38 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 					delete pEvent;
 				}
 
-				//投递异步send请求
-				Event_handle* pEvent2 = new Event_handle{ client_handle.socket,Event_Send ,TRUE,(uint32_t)strnlen(pEvent->buffer.buf,Client_Buffer_Size) };
-				if (pEvent2)
+				if(client_handle.Get_Total_Receive_Data_Size())
 				{
-					if (pEvent2->buffer.buf)
+					string data = client_handle.Get_All_Receive_Data();
+
+					//投递异步send请求
+					Event_handle* pEvent2 = new Event_handle{ client_handle.socket,Event_Send ,TRUE,data.size() };
+					if (pEvent2)
 					{
-						memcpy(pEvent2->buffer.buf, pEvent->buffer.buf, strnlen(pEvent->buffer.buf, Client_Buffer_Size));
-
-						ret = WSASend(
-							client_handle.socket,
-							&pEvent2->buffer,			//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
-							1,							//上面数组的长度，通常为 1
-							NULL,						//实际发送的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
-							0,							//发送标志（一般为 0）
-							(LPWSAOVERLAPPED)pEvent2,
-							NULL						//发送完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
-						);
-
-						error = WSAGetLastError();
-						if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
+						if (pEvent2->buffer.buf)
 						{
-							cout << "Error: WSASend() error code is " << error << endl;
+							memcpy(pEvent2->buffer.buf, data.data(), data.size());
 
+							ret = WSASend(
+								client_handle.socket,
+								&pEvent2->buffer,			//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
+								1,							//上面数组的长度，通常为 1
+								NULL,						//实际发送的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
+								0,							//发送标志（一般为 0）
+								(LPWSAOVERLAPPED)pEvent2,
+								NULL						//发送完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
+							);
+
+							error = WSAGetLastError();
+							if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
+							{
+								cout << "Error: WSASend() error code is " << error << endl;
+
+								delete pEvent2;
+							}
+						}
+						else
+						{
 							delete pEvent2;
 						}
 					}
