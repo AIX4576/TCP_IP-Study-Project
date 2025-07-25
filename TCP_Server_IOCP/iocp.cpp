@@ -148,10 +148,6 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 			{
 			case Event_Accept_Connect:
 			{
-				client_handle.Connect_Deal();
-
-				cout << "client [" << (int)client_handle.socket << "] connected, ip is " << client_handle.ip << ", port is " << client_handle.port << endl;
-
 				//将新连接的 client socket 与 iocp 绑定，然后投递异步recv请求，投递多个
 				HANDLE iocp = CreateIoCompletionPort((HANDLE)client_handle.socket, server_handle.Get_IOCP(), (ULONG_PTR)&server_handle, 0);
 				if (iocp)
@@ -202,7 +198,12 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 						}
 					}
 
-					if (count == 0)
+					if (count)
+					{
+						client_handle.Connect_Deal();
+						cout << "client [" << (int)client_handle.socket << "] connected, ip is " << client_handle.ip << ", port is " << client_handle.port << endl;
+					}
+					else
 					{
 						lock_guard<mutex> lock{ server_handle.client_handles_mutex };
 						server_handle.client_handles.erase(client_handle.socket);
@@ -317,41 +318,12 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 					delete pEvent;
 				}
 
+				//发送数据演示
 				if(client_handle.Get_Total_Receive_Data_Size())
 				{
 					string data = client_handle.Get_All_Receive_Data();
 
-					//投递异步send请求
-					Event_handle* pEvent2 = new Event_handle{ client_handle.socket,Event_Send ,TRUE,data.size() };
-					if (pEvent2)
-					{
-						if (pEvent2->buffer.buf)
-						{
-							memcpy(pEvent2->buffer.buf, data.data(), data.size());
-
-							ret = WSASend(
-								client_handle.socket,
-								&pEvent2->buffer,			//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
-								1,							//上面数组的长度，通常为 1
-								NULL,						//实际发送的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
-								0,							//发送标志（一般为 0）
-								(LPWSAOVERLAPPED)pEvent2,
-								NULL						//发送完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
-							);
-
-							error = WSAGetLastError();
-							if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
-							{
-								cout << "Error: WSASend() error code is " << error << endl;
-
-								delete pEvent2;
-							}
-						}
-						else
-						{
-							delete pEvent2;
-						}
-					}
+					client_handle.Send_Data_Ex(data.data(), (uint32_t)data.size());
 				}
 			}
 			break;

@@ -49,22 +49,22 @@ struct Event_handle
 	DWORD flag{};//WSARecv()要用到，默认是0
 	WSABUF buffer{};//WSARecv()和WSASend()要用到
 
-	Event_handle(bool allocate_buffer, size_t buffer_size = Client_Buffer_Size, size_t event_id = 0) : socket(INVALID_SOCKET), event(Event_None)
+	Event_handle(bool allocate_buffer, uint32_t buffer_size = Client_Buffer_Size, size_t event_id = 0) : socket(INVALID_SOCKET), event(Event_None)
 	{
 		if(allocate_buffer)
 		{
-			buffer.buf = new char[(ULONG)buffer_size] {};
-			buffer.len = buffer.buf ? (ULONG)buffer_size : 0;
+			buffer.buf = new char[buffer_size] {};
+			buffer.len = buffer.buf ? buffer_size : 0;
 		}
 
 		id = event_id;
 	}
-	Event_handle(SOCKET socket, Deliver_Event event, bool allocate_buffer, size_t buffer_size = Client_Buffer_Size, size_t event_id = 0) : socket(socket), event(event)
+	Event_handle(SOCKET socket, Deliver_Event event, bool allocate_buffer, uint32_t buffer_size = Client_Buffer_Size, size_t event_id = 0) : socket(socket), event(event)
 	{
 		if (allocate_buffer)
 		{
-			buffer.buf = new char[(ULONG)buffer_size] {};
-			buffer.len = buffer.buf ? (ULONG)buffer_size : 0;
+			buffer.buf = new char[buffer_size] {};
+			buffer.len = buffer.buf ? buffer_size : 0;
 		}
 
 		id = event_id;
@@ -253,24 +253,6 @@ struct Client_Handle
 
 		return TRUE;
 	}
-	string Peek_All_Receive_Data()
-	{
-		string data;
-
-		while (flag.test_and_set(memory_order_acquire))
-		{
-			this_thread::yield();
-		}
-
-		for (auto& it : receive_data)
-		{
-			data += it.second;
-		}
-
-		flag.clear(memory_order_release);
-
-		return data;
-	}
 	string Get_All_Receive_Data()
 	{
 		string data;
@@ -290,6 +272,55 @@ struct Client_Handle
 		flag.clear(memory_order_release);
 
 		return data;
+	}
+	bool Send_Data_Ex(const char* data, uint32_t size)
+	{
+		if (socket_status != Socket_Connected)
+		{
+			return FALSE;
+		}
+
+		//投递异步send请求
+		Event_handle* pEvent = new Event_handle{ socket,Event_Send ,TRUE,size };
+		if (pEvent)
+		{
+			if (pEvent->buffer.buf)
+			{
+				memcpy(pEvent->buffer.buf, data, size);
+
+				int ret = 0;
+				int error = 0;
+				ret = WSASend(
+					socket,
+					&pEvent->buffer,			//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
+					1,							//上面数组的长度，通常为 1
+					NULL,						//实际发送的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
+					0,							//发送标志（一般为 0）
+					(LPWSAOVERLAPPED)pEvent,
+					NULL						//发送完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
+				);
+
+				error = WSAGetLastError();
+				if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
+				{
+					delete pEvent;
+
+					return FALSE;
+				}
+			}
+			else
+			{
+				delete pEvent;
+
+				return FALSE;
+			}
+		}
+		else
+		{
+			return FALSE;
+		}
+
+		return TRUE;
 	}
 
 private:

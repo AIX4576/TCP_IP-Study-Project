@@ -1,6 +1,21 @@
 #include"iocp.h"
 #include"frame.h"
 
+class Device_Handle
+{
+
+};
+
+void application_thread(bool& run_flag, Server_Handle& server_handle)
+{
+
+
+	while (run_flag)
+	{
+		this_thread::sleep_for(chrono::milliseconds(10));
+	}
+}
+
 int main()
 {
 	WORD version = MAKEWORD(2, 2);
