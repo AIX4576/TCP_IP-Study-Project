@@ -3,13 +3,11 @@
 
 class Device_Handle
 {
-
+	
 };
 
 void application_thread(bool& run_flag, Server_Handle& server_handle)
 {
-
-
 	while (run_flag)
 	{
 		this_thread::sleep_for(chrono::milliseconds(10));
@@ -41,10 +39,14 @@ int main()
 	bool run_flag = TRUE;
 	list<thread> thread_pool;
 
+	//iocp工作线程
 	for (int i = 0; i < Worker_Threads_Number; i++)
 	{
 		thread_pool.push_back(thread(work_thread, ref(run_flag), ref(server_handle)));
 	}
+
+	//iocp清理线程
+	thread_pool.push_back(thread(clean_thread, ref(run_flag), ref(server_handle)));
 
 	while (TRUE)
 	{
@@ -53,6 +55,10 @@ int main()
 		if (c == 'q')
 		{
 			break;
+		}
+		else if (c == 'i')
+		{
+			cout << "current clients number is " << server_handle.client_handles.size() << endl;
 		}
 	}
 

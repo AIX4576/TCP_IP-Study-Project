@@ -148,13 +148,16 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 			{
 			case Event_Accept_Connect:
 			{
+				//更新最后活动时间
+				client_handle.Update_Last_Active_Time();
+
 				//将新连接的 client socket 与 iocp 绑定，然后投递异步recv请求，投递多个
 				HANDLE iocp = CreateIoCompletionPort((HANDLE)client_handle.socket, server_handle.Get_IOCP(), (ULONG_PTR)&server_handle, 0);
 				if (iocp)
 				{
 					uint32_t count = 0;
 
-					for (int i = 0; i < Worker_Threads_Number; i++)
+					for (int i = 0; i < Per_Client_Receive_Event_Number; i++)
 					{
 						Event_handle* pEvent1 = new Event_handle
 						{ client_handle.socket,
@@ -292,9 +295,30 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 			break;
 			case Event_Receive:
 			{
-				//将数据存入receive_data中
-				client_handle.Insert_To_Receive_Data(pEvent, bytes_transferred);
+				//更新最后活动时间
+				client_handle.Update_Last_Active_Time();
 
+				//将接收到的数据排序，存入有序数据缓冲区和乱序数据缓冲区
+				client_handle.Sort_Receive_Data(pEvent, bytes_transferred);
+
+				//若有序数据缓冲区的数据足够组成完整消息，则提交给业务层
+				if (client_handle.Get_Ordered_Data_Size() >= Completed_Message_Size_Threshold)
+				{
+					
+				}
+
+				//若乱序数据缓冲区中积压的接收事件序列号数量超过阈值，说明可能存在数据丢失，此时应关闭连接
+				if (client_handle.Get_Unordered_Data_Number() > Per_Client_Unordered_Data_Number_Threshold)
+				{
+					lock_guard<mutex> lock{ server_handle.client_handles_mutex };
+					server_handle.client_handles.erase(client_handle.socket);
+
+					delete pEvent;
+
+					break;
+				}
+
+				//设置该receive事件新的id
 				pEvent->Set_id(client_handle.Make_Receive_Event_id());
 
 				//继续投递异步recv请求
@@ -316,14 +340,6 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 					cout << "Error: WSARecv() error code is " << error << endl;
 
 					delete pEvent;
-				}
-
-				//发送数据演示
-				if(client_handle.Get_Total_Receive_Data_Size())
-				{
-					string data = client_handle.Get_All_Receive_Data();
-
-					client_handle.Send_Data_Ex(data.data(), (uint32_t)data.size());
 				}
 			}
 			break;
@@ -367,5 +383,39 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 				delete pEvent;
 			}
 		}
+	}
+}
+
+void clean_thread(bool& run_flag, Server_Handle& server_handle)
+{
+	auto last_scan_time = chrono::system_clock::now();
+
+	while (run_flag)
+	{
+		//每 Client_Active_Timeout_Scan_Interval 秒遍历一次所有 client_handles ，把活动超时的 socket 断开连接
+		auto current_time = chrono::system_clock::now();
+		if (chrono::duration_cast<chrono::seconds>(current_time - last_scan_time).count() > Client_Active_Timeout_Scan_Interval)
+		{
+			last_scan_time = current_time;
+
+			lock_guard<mutex> lock{ server_handle.client_handles_mutex };
+
+			// 用迭代器遍历，避免范围for的隐式迭代器失效问题
+			auto it = server_handle.client_handles.begin();
+			while (it != server_handle.client_handles.end())
+			{
+				if (it->second.Is_Active_Timeout())
+				{
+					// erase返回下一个有效迭代器，避免失效
+					it = server_handle.client_handles.erase(it);
+				}
+				else
+				{
+					it++;
+				}
+			}
+		}
+
+		this_thread::sleep_for(chrono::seconds(1));
 	}
 }

@@ -23,7 +23,13 @@ using namespace std;
 #define Receive_Data_Length 0
 #define Local_Address_Length (sizeof(SOCKADDR_IN) + 16)
 #define Remote_Address_Length (sizeof(SOCKADDR_IN) + 16)
-#define Client_Buffer_Size 1024
+
+#define Per_Client_Receive_Event_Number 3
+#define Per_Client_Unordered_Data_Number_Threshold 10
+#define Completed_Message_Size_Threshold 8
+#define Client_Active_Timeout_Second 180
+#define Client_Active_Timeout_Scan_Interval 60
+#define Client_Buffer_Size 1500
 
 enum Socket_Status
 {
@@ -162,8 +168,10 @@ struct Client_Handle
 			swap(ip, other.ip);
 			swap(port, other.port);
 			memcpy(output_buffer, other.output_buffer, sizeof(output_buffer));
-			swap(receive_data, other.receive_data);
-			swap(total_receive_data_size, other.total_receive_data_size);
+			swap(next_expected_sequence, other.next_expected_sequence);
+			swap(ordered_data, other.ordered_data);
+			swap(unordered_data, other.unordered_data);
+			swap(last_active_time, other.last_active_time);
 		}
 	}
 	Client_Handle& operator=(Client_Handle&& other) noexcept
@@ -180,15 +188,18 @@ struct Client_Handle
 			}
 
 			ip.clear();
-			receive_data.clear();
+			ordered_data.clear();
+			unordered_data.clear();
 
 			swap(socket, other.socket);
 			swap(socket_status, other.socket_status);
 			swap(ip, other.ip);
 			swap(port, other.port);
 			memcpy(output_buffer, other.output_buffer, sizeof(output_buffer));
-			swap(receive_data, other.receive_data);
-			swap(total_receive_data_size, other.total_receive_data_size);
+			swap(next_expected_sequence, other.next_expected_sequence);
+			swap(ordered_data, other.ordered_data);
+			swap(unordered_data, other.unordered_data);
+			swap(last_active_time, other.last_active_time);
 		}
 
 		return *this;
@@ -220,15 +231,52 @@ struct Client_Handle
 	{
 		socket_status = Socket_Disconnected;
 	}
+	void Update_Last_Active_Time()
+	{
+		last_active_time = chrono::system_clock::now();
+	}
+	bool Is_Active_Timeout() const
+	{
+		auto current_time = chrono::system_clock::now();
+		long long duration = chrono::duration_cast<chrono::seconds>(current_time - last_active_time).count();
+
+		if ((duration > Client_Active_Timeout_Second) && (socket_status == Socket_Connected))
+		{
+			return TRUE;
+		}
+		else
+		{
+			return FALSE;
+		}
+	}
 	size_t Make_Receive_Event_id()
 	{
-		return receive_event_count.fetch_add(1, memory_order_release);
+		return receive_event_sequence.fetch_add(1, memory_order_release);
 	}
-	size_t Get_Total_Receive_Data_Size() const
+	size_t Get_Unordered_Data_Number()
 	{
-		return total_receive_data_size;
+		return unordered_data.size();
 	}
-	bool Insert_To_Receive_Data(Event_handle* event, uint32_t data_size)
+	size_t Get_Ordered_Data_Size()
+	{
+		return ordered_data.size();
+	}
+	string Get_Ordered_Data()
+	{
+		// 循环尝试获取锁，test_and_set会原子地将flag设为true，并返回操作前的值
+		while (flag.test_and_set(memory_order_acquire))
+		{
+			this_thread::yield();
+		}
+
+		string data{ move(ordered_data) };
+		ordered_data.clear();
+
+		flag.clear(memory_order_release);
+
+		return data;
+	}
+	bool Sort_Receive_Data(Event_handle* event, uint32_t data_size)
 	{
 		if (event == NULL)
 		{
@@ -245,33 +293,41 @@ struct Client_Handle
 			this_thread::yield();
 		}
 
-		string data(event->buffer.buf, min(event->buffer.len, data_size));
-		total_receive_data_size += data.size();
-		receive_data.emplace(event->Get_id(), move(data));
+		size_t event_id = event->Get_id();
+		if (event_id == next_expected_sequence)
+		{
+			// 1. 若当前receive事件的id等于期望的序列号，直接拼接
+			ordered_data += string(event->buffer.buf, min(event->buffer.len, data_size));
+			next_expected_sequence++;// 期望序列号+1
+
+			// 2. 检查乱序缓冲区，处理后续连续的序列号
+			auto it = unordered_data.find(next_expected_sequence);
+			while (it != unordered_data.end())
+			{
+				// 拼接下一个连续数据
+				ordered_data += it->second;
+				next_expected_sequence++;// 期望序列号+1
+
+				//移除该数据
+				unordered_data.erase(it);
+
+				// 继续检查下一个序列号
+				it = unordered_data.find(next_expected_sequence);
+			}
+		}
+		else if (event_id > next_expected_sequence)
+		{
+			// 3. 若id不连续，存入乱序缓冲区，仅缓存未来的序列号（避免重复/过期数据）
+			unordered_data.emplace(event_id, string(event->buffer.buf, min(event->buffer.len, data_size)));
+		}
+		else
+		{
+			// 4. id小于期望的序列号（已处理过的重复数据）
+		}
 
 		flag.clear(memory_order_release);
 
 		return TRUE;
-	}
-	string Get_All_Receive_Data()
-	{
-		string data;
-
-		while (flag.test_and_set(memory_order_acquire))
-		{
-			this_thread::yield();
-		}
-
-		for (auto& it : receive_data)
-		{
-			data += it.second;
-		}
-		receive_data.clear();
-		total_receive_data_size = 0;
-
-		flag.clear(memory_order_release);
-
-		return data;
 	}
 	bool Send_Data_Ex(const char* data, uint32_t size)
 	{
@@ -325,9 +381,11 @@ struct Client_Handle
 
 private:
 	atomic_flag flag{};// 最简单的原子类型，仅支持 test_and_set 和 clear 操作
-	atomic<size_t> receive_event_count{};
-	map<size_t, string> receive_data;
-	size_t total_receive_data_size{};
+	atomic<size_t> receive_event_sequence{};//接收事件的序号;总共可以用2^64大小的事件数量，假设每秒消耗1亿个事件，也可以使用5849年，可以认为不会消耗完
+	size_t next_expected_sequence{};//下一个期望接收的事件的序号
+	string ordered_data;//有序数据缓冲区
+	unordered_map<size_t, string> unordered_data;//乱序数据缓冲区
+	chrono::system_clock::time_point last_active_time{};//最后活动时间
 };
 
 class Server_Handle
@@ -426,3 +484,5 @@ private:
 };
 
 void work_thread(bool& run_flag, Server_Handle& server_handle);
+void send_thread(bool& run_flag, Server_Handle& server_handle);
+void clean_thread(bool& run_flag, Server_Handle& server_handle);
