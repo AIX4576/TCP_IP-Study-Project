@@ -132,10 +132,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\include\frame.h" />
-    <ClInclude Include="iocp.h" />
+    <ClInclude Include="iocp_server.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="iocp.cpp" />
+    <ClCompile Include="iocp_server.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

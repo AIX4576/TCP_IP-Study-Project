@@ -1,4 +1,4 @@
-#include"iocp.h"
+#include"iocp_server.h"
 #include"frame.h"
 
 class Device_Handle
@@ -47,6 +47,9 @@ int main()
 
 	//iocp清理线程
 	thread_pool.push_back(thread(clean_thread, ref(run_flag), ref(server_handle)));
+
+	//应用线程
+	thread_pool.push_back(thread(application_thread, ref(run_flag), ref(server_handle)));
 
 	while (TRUE)
 	{

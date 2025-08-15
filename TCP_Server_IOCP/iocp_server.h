@@ -17,6 +17,8 @@ using namespace std;
 #pragma comment(lib, "ws2_32.lib")	// 链接基础套接字库
 #pragma comment(lib, "mswsock.lib") // 链接扩展套接字库
 
+#define Server_Port 8080
+
 #define Worker_Threads_Number 4
 #define Max_Clients_Number 8
 
@@ -25,11 +27,12 @@ using namespace std;
 #define Remote_Address_Length (sizeof(SOCKADDR_IN) + 16)
 
 #define Per_Client_Receive_Event_Number 3
-#define Per_Client_Unordered_Data_Number_Threshold 10
+#define Per_Client_Ordered_Data_Default_Capacity (1024 * 16)
+#define Per_Client_Unordered_Data_Number_Threshold 8
 #define Completed_Message_Size_Threshold 8
 #define Client_Active_Timeout_Second 180
 #define Client_Active_Timeout_Scan_Interval 60
-#define Client_Buffer_Size 1500
+#define Event_Buffer_Size 1500
 
 enum Socket_Status
 {
@@ -49,13 +52,14 @@ enum Deliver_Event
 
 struct Event_handle
 {
+public:
 	OVERLAPPED overlapped{};//必须清零 OVERLAPPED 结构，否则可能导致未定义行为
 	SOCKET socket;
 	Deliver_Event event;
 	DWORD flag{};//WSARecv()要用到，默认是0
 	WSABUF buffer{};//WSARecv()和WSASend()要用到
 
-	Event_handle(bool allocate_buffer, uint32_t buffer_size = Client_Buffer_Size, size_t event_id = 0) : socket(INVALID_SOCKET), event(Event_None)
+	Event_handle(bool allocate_buffer, uint32_t buffer_size = Event_Buffer_Size, size_t event_id = 0) : socket(INVALID_SOCKET), event(Event_None)
 	{
 		if(allocate_buffer)
 		{
@@ -65,7 +69,7 @@ struct Event_handle
 
 		id = event_id;
 	}
-	Event_handle(SOCKET socket, Deliver_Event event, bool allocate_buffer, uint32_t buffer_size = Client_Buffer_Size, size_t event_id = 0) : socket(socket), event(event)
+	Event_handle(SOCKET socket, Deliver_Event event, bool allocate_buffer, uint32_t buffer_size = Event_Buffer_Size, size_t event_id = 0) : socket(socket), event(event)
 	{
 		if (allocate_buffer)
 		{
@@ -137,8 +141,9 @@ private:
 	size_t id{};
 };
 
-struct Client_Handle
+class Client_Handle
 {
+public:
 	SOCKET socket;
 	Socket_Status socket_status;
 	string ip;
@@ -151,6 +156,8 @@ struct Client_Handle
 		if (socket != INVALID_SOCKET)
 		{
 			socket_status = Socket_Disconnected;
+			ordered_data.reserve(Per_Client_Ordered_Data_Default_Capacity);
+			unordered_data.reserve(Per_Client_Unordered_Data_Number_Threshold + 2);
 		}
 	}
 	Client_Handle(Client_Handle&) = delete;
@@ -226,10 +233,19 @@ struct Client_Handle
 
 		ip = client_ip;
 		port = ntohs(pClient_address->sin_port);
+
+		Update_Last_Active_Time();
 	}
 	void Disonnect_Deal()
 	{
 		socket_status = Socket_Disconnected;
+		ip.clear();
+		port = 0;
+		lock.clear();
+		receive_event_sequence = 0;
+		next_expected_sequence = 0;
+		ordered_data.clear();
+		unordered_data.clear();
 	}
 	void Update_Last_Active_Time()
 	{
@@ -263,16 +279,21 @@ struct Client_Handle
 	}
 	string Get_Ordered_Data()
 	{
-		// 循环尝试获取锁，test_and_set会原子地将flag设为true，并返回操作前的值
-		while (flag.test_and_set(memory_order_acquire))
+		// 循环尝试获取锁，test_and_set会原子地将lock设为true，并返回操作前的值
+		while (lock.test_and_set(memory_order_acquire))
 		{
 			this_thread::yield();
+
+			if (Get_Ordered_Data_Size() == 0)
+			{
+				return {};
+			}
 		}
 
-		string data{ move(ordered_data) };
+		string data{ ordered_data };
 		ordered_data.clear();
 
-		flag.clear(memory_order_release);
+		lock.clear(memory_order_release);
 
 		return data;
 	}
@@ -287,8 +308,8 @@ struct Client_Handle
 			return FALSE;
 		}
 
-		// 循环尝试获取锁，test_and_set会原子地将flag设为true，并返回操作前的值
-		while (flag.test_and_set(memory_order_acquire))
+		// 循环尝试获取锁，test_and_set会原子地将lock设为true，并返回操作前的值
+		while (lock.test_and_set(memory_order_acquire))
 		{
 			this_thread::yield();
 		}
@@ -297,7 +318,7 @@ struct Client_Handle
 		if (event_id == next_expected_sequence)
 		{
 			// 1. 若当前receive事件的id等于期望的序列号，直接拼接
-			ordered_data += string(event->buffer.buf, min(event->buffer.len, data_size));
+			ordered_data.append(event->buffer.buf, min(event->buffer.len, data_size));
 			next_expected_sequence++;// 期望序列号+1
 
 			// 2. 检查乱序缓冲区，处理后续连续的序列号
@@ -325,7 +346,7 @@ struct Client_Handle
 			// 4. id小于期望的序列号（已处理过的重复数据）
 		}
 
-		flag.clear(memory_order_release);
+		lock.clear(memory_order_release);
 
 		return TRUE;
 	}
@@ -380,7 +401,7 @@ struct Client_Handle
 	}
 
 private:
-	atomic_flag flag{};// 最简单的原子类型，仅支持 test_and_set 和 clear 操作
+	atomic_flag lock{};// 最简单的原子类型，仅支持 test_and_set 和 clear 操作
 	atomic<size_t> receive_event_sequence{};//接收事件的序号;总共可以用2^64大小的事件数量，假设每秒消耗1亿个事件，也可以使用5849年，可以认为不会消耗完
 	size_t next_expected_sequence{};//下一个期望接收的事件的序号
 	string ordered_data;//有序数据缓冲区
@@ -481,6 +502,39 @@ private:
 	SOCKET socket;
 	HANDLE iocp;
 	bool initialize_flag;
+};
+
+struct Message
+{
+	SOCKET socket;
+	string data;
+
+	Message() :socket(INVALID_SOCKET) {}
+	Message(SOCKET socket, string& data) :socket(socket), data(move(data)) {}
+	Message(Message&) = delete;
+	Message& operator=(Message&) = delete;
+	Message(Message&& other) noexcept
+	{
+		if (this != &other)
+		{
+			socket = INVALID_SOCKET;
+
+			swap(socket, other.socket);
+			swap(data, other.data);
+		}
+	}
+	Message& operator=(Message&& other) noexcept
+	{
+		if (this != &other)
+		{
+			socket = INVALID_SOCKET;
+
+			swap(socket, other.socket);
+			swap(data, other.data);
+		}
+
+		return *this;
+	}
 };
 
 void work_thread(bool& run_flag, Server_Handle& server_handle);

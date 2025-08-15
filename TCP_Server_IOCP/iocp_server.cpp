@@ -1,4 +1,4 @@
-#include"iocp.h"
+#include"iocp_server.h"
 
 Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_flag(FALSE)
 {
@@ -15,7 +15,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	sockaddr_in address_server
 	{
 		.sin_family = AF_INET,
-		.sin_port = htons(8080),
+		.sin_port = htons(Server_Port),
 		.sin_addr = INADDR_ANY,
 	};
 
@@ -148,9 +148,6 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 			{
 			case Event_Accept_Connect:
 			{
-				//更新最后活动时间
-				client_handle.Update_Last_Active_Time();
-
 				//将新连接的 client socket 与 iocp 绑定，然后投递异步recv请求，投递多个
 				HANDLE iocp = CreateIoCompletionPort((HANDLE)client_handle.socket, server_handle.Get_IOCP(), (ULONG_PTR)&server_handle, 0);
 				if (iocp)
@@ -163,7 +160,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 						{ client_handle.socket,
 							Event_Receive,
 							TRUE,
-							Client_Buffer_Size,
+							Event_Buffer_Size,
 							client_handle.Make_Receive_Event_id()
 						};
 						if (pEvent1 == NULL)
