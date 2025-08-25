@@ -61,18 +61,20 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	//将socket和完成端口绑定
 	CreateIoCompletionPort((HANDLE)socket, iocp, (ULONG_PTR)this, 0);
 
+	client_handles.reserve(Max_Clients_Number + 2);
+
 	//投递异步accept请求，投递多个
 	for (int i = 0; i < Worker_Threads_Number; i++)
 	{
 		Client_Handle temp_client;
-		Event_handle* pEvent = new Event_handle{ temp_client.socket ,Event_Accept_Connect ,FALSE };
-		if (pEvent == NULL)
+		if (temp_client.socket == INVALID_SOCKET)
 		{
 			continue;
 		}
-		if (temp_client.socket == INVALID_SOCKET)
+
+		Event_handle* pEvent = new Event_handle{ temp_client.socket ,Event_Accept_Connect ,FALSE };
+		if (pEvent == NULL)
 		{
-			delete pEvent;
 			continue;
 		}
 
@@ -96,11 +98,19 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 		error = WSAGetLastError();
 		if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 		{
+			client_handles.erase(client_handle.socket);
 			delete pEvent;
 		}
 	}
 
-	initialize_flag = TRUE;
+	if(client_handles.size())
+	{
+		initialize_flag = TRUE;
+	}
+	else
+	{
+		initialize_flag = FALSE;
+	}
 }
 
 void work_thread(bool& run_flag, Server_Handle& server_handle)
@@ -216,7 +226,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 				}
 
 				//投递新的异步accept请求
-				if (server_handle.client_handles.size() < Max_Clients_Number)
+				if (server_handle.client_handles.size() <= Max_Clients_Number)
 				{
 					Client_Handle temp_client;
 
@@ -280,6 +290,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 
 				if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 				{
+					lock_guard<mutex> lock(server_handle.client_handles_mutex);
 					server_handle.client_handles.erase(client_handle.socket);
 					delete pEvent;
 				}
@@ -359,21 +370,25 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 			else
 			{
 				// 有任务完成但出错了，要根据错误码来处理，比如连接被断开等
-				DWORD error1 = GetLastError();
-				DWORD error2 = WSAGetLastError();
 				Event_handle* pEvent = (Event_handle*)pOverlapped;
 
-				if ((bytes_transferred == 0) &&
-					((error1 == ERROR_OPERATION_ABORTED) || (error1 == ERROR_NETNAME_DELETED) || (error1 == ERROR_SUCCESS) || (error2 == WSAECONNRESET)))
+				if (completion_key == (ULONG_PTR)&server_handle)
 				{
-					auto it1 = server_handle.client_handles.find(pEvent->socket);
-					if ((it1 != server_handle.client_handles.end()) && (pEvent->event != Event_Accept_Connect))
-					{
-						//当socket断开连接时，所有未完成的异步操作都会被系统强制完成，并通过完成端口（IOCP）机制通知应用程序
-						cout << "client socket [" << (int)pEvent->socket << "] close" << endl;
+					DWORD error1 = GetLastError();
+					DWORD error2 = WSAGetLastError();
 
-						lock_guard<mutex> lock{ server_handle.client_handles_mutex };
-						server_handle.client_handles.erase(pEvent->socket);
+					if ((bytes_transferred == 0) &&
+						((error1 == ERROR_OPERATION_ABORTED) || (error1 == ERROR_NETNAME_DELETED) || (error1 == ERROR_SUCCESS) || (error2 == WSAECONNRESET)))
+					{
+						auto it1 = server_handle.client_handles.find(pEvent->socket);
+						if (it1 != server_handle.client_handles.end())
+						{
+							//当socket断开连接时，所有未完成的异步操作都会被系统强制完成，并通过完成端口（IOCP）机制通知应用程序
+							cout << "client socket [" << (int)pEvent->socket << "] close" << endl;
+
+							lock_guard<mutex> lock{ server_handle.client_handles_mutex };
+							server_handle.client_handles.erase(pEvent->socket);
+						}
 					}
 				}
 
@@ -413,6 +428,6 @@ void clean_thread(bool& run_flag, Server_Handle& server_handle)
 			}
 		}
 
-		this_thread::sleep_for(chrono::seconds(1));
+		this_thread::sleep_for(chrono::seconds(3));
 	}
 }

@@ -416,7 +416,6 @@ public:
 	mutex client_handles_mutex;
 
 	Server_Handle();
-	Server_Handle(SOCKET socket, HANDLE iocp) :socket(socket), iocp(iocp), initialize_flag(TRUE) {}
 	Server_Handle(Server_Handle&) = delete;
 	Server_Handle& operator=(Server_Handle&) = delete;
 	Server_Handle(Server_Handle&& other) noexcept
