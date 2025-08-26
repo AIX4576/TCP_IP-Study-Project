@@ -6,7 +6,7 @@
 #define Start_Bytes1 0xbb
 #define Start_Bytes2 0xcc
 #define Start_Bytes3 0xdd
-#define Start_4Bytes ((uint32_t)((Start_Bytes3<<24)|(Start_Bytes2<<16)|(Start_Bytes1<<8)|Start_Bytes0))
+#define Start_4Bytes ((uint32_t)((Start_Bytes3 << 24) | (Start_Bytes2 << 16) | (Start_Bytes1 << 8) | Start_Bytes0))
 
 #define User_Name_Size 32
 #define Password_Size 32
@@ -25,12 +25,12 @@ struct Frame_Header
 	{
 		uint8_t bytes[4];
 		uint32_t bytes4;
-	}start_4bytes;
+	} start_4bytes;
 	int command;
-	int frame_length;//整个数据帧的长度大小（包括帧数据头和帧数据体）
+	int frame_length; // 整个数据帧的长度大小（包括帧数据头和帧数据体）
 };
 
-struct Frame_Login :protected Frame_Header
+struct Frame_Login : protected Frame_Header
 {
 	void Initialize_Header()
 	{
@@ -42,7 +42,7 @@ struct Frame_Login :protected Frame_Header
 	{
 		Initialize_Header();
 	}
-	Frame_Login(const char* user_name, const char* password)
+	Frame_Login(const char *user_name, const char *password)
 	{
 		Initialize_Header();
 		strncpy_s(this->user_name, user_name, User_Name_Size - 1);
@@ -53,7 +53,7 @@ struct Frame_Login :protected Frame_Header
 	char password[Password_Size]{};
 };
 
-struct Frame_Login_Result :protected Frame_Header
+struct Frame_Login_Result : protected Frame_Header
 {
 	void Initialize_Header()
 	{

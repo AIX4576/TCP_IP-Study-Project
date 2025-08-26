@@ -29,5 +29,8 @@
     <ClCompile Include="iocp_server.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="override_new_delete.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
