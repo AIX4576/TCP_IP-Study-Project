@@ -61,8 +61,6 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	//将socket和完成端口绑定
 	CreateIoCompletionPort((HANDLE)socket, iocp, (ULONG_PTR)this, 0);
 
-	client_handles.reserve(Max_Clients_Number + 2);
-
 	//投递异步accept请求，投递多个
 	for (int i = 0; i < Worker_Threads_Number; i++)
 	{
@@ -113,7 +111,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	}
 }
 
-void work_thread(bool& run_flag, Server_Handle& server_handle)
+void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::ConcurrentQueue<Message>& receive_queue)
 {
 	DWORD bytes_transferred = 0;
 	ULONG_PTR completion_key = 0;
@@ -312,7 +310,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 				//若有序数据缓冲区的数据足够组成完整消息，则提交给业务层
 				if (client_handle.Get_Ordered_Data_Size() >= Completed_Message_Size_Threshold)
 				{
-					
+					receive_queue.enqueue(Message{ client_handle.socket,client_handle.Get_Ordered_Data() });
 				}
 
 				//若乱序数据缓冲区中积压的接收事件序列号数量超过阈值，说明可能存在数据丢失，此时应关闭连接
@@ -395,6 +393,27 @@ void work_thread(bool& run_flag, Server_Handle& server_handle)
 				delete pEvent;
 			}
 		}
+	}
+}
+
+void send_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::ConcurrentQueue<Message>& send_queue)
+{
+	Message message;
+
+	while (run_flag)
+	{
+		while (send_queue.try_dequeue(message))
+		{
+			auto it = server_handle.client_handles.find(message.socket);
+			if (it != server_handle.client_handles.end())
+			{
+				Client_Handle& client_handle = it->second;
+
+				client_handle.Send_Data_Ex(message.data.data(), message.data.size());
+			}
+		}
+
+		this_thread::sleep_for(chrono::milliseconds(5));
 	}
 }
 

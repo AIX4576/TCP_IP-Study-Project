@@ -8,8 +8,9 @@
 #include<unordered_map>
 #include<mutex>
 #include<atomic>
-
 using namespace std;
+
+#include"concurrentqueue.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include<WS2tcpip.h> //基础套接字API头文件
@@ -20,7 +21,8 @@ using namespace std;
 #define Server_Port 8080
 
 #define Worker_Threads_Number 4
-#define Max_Clients_Number 8
+#define Send_Threads_Number 2
+#define Max_Clients_Number 1000000
 
 #define Receive_Data_Length 0
 #define Local_Address_Length (sizeof(SOCKADDR_IN) + 16)
@@ -413,7 +415,7 @@ class Server_Handle
 {
 public:
 	unordered_map<SOCKET, Client_Handle> client_handles;
-	mutex client_handles_mutex;
+	mutex client_handles_mutex; 
 
 	Server_Handle();
 	Server_Handle(Server_Handle&) = delete;
@@ -509,7 +511,8 @@ struct Message
 	string data;
 
 	Message() :socket(INVALID_SOCKET) {}
-	Message(SOCKET socket, string& data) :socket(socket), data(move(data)) {}
+	Message(SOCKET socket, string& data) :socket(socket), data(data) {}
+	Message(SOCKET socket, string&& data) :socket(socket), data(data) {}
 	Message(Message&) = delete;
 	Message& operator=(Message&) = delete;
 	Message(Message&& other) noexcept
@@ -536,6 +539,6 @@ struct Message
 	}
 };
 
-void work_thread(bool& run_flag, Server_Handle& server_handle);
-void send_thread(bool& run_flag, Server_Handle& server_handle);
+void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::ConcurrentQueue<Message>& receive_queue);
+void send_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::ConcurrentQueue<Message>& send_queue);
 void clean_thread(bool& run_flag, Server_Handle& server_handle);

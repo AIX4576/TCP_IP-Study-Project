@@ -1,16 +1,25 @@
 #include"iocp_server.h"
 #include"frame.h"
-#include"concurrentqueue.h"
 
 class Device_Handle
 {
 	
 };
 
-void application_thread(bool& run_flag, Server_Handle& server_handle)
+void application_thread(bool& run_flag,
+	Server_Handle& server_handle,
+	moodycamel::ConcurrentQueue<Message>& receive_queue,
+	moodycamel::ConcurrentQueue<Message>& send_queue)
 {
+	Message message;
+
 	while (run_flag)
 	{
+		while (receive_queue.try_dequeue(message))
+		{
+			send_queue.enqueue(move(message));
+		}
+
 		this_thread::sleep_for(chrono::milliseconds(10));
 	}
 }
@@ -36,6 +45,10 @@ int main()
 		return -1;
 	}
 
+	//创建无锁并发队列
+	moodycamel::ConcurrentQueue<Message> receive_queue;
+	moodycamel::ConcurrentQueue<Message> send_queue;
+
 	//创建线程池
 	bool run_flag = TRUE;
 	list<thread> thread_pool;
@@ -43,14 +56,20 @@ int main()
 	//iocp工作线程
 	for (int i = 0; i < Worker_Threads_Number; i++)
 	{
-		thread_pool.push_back(thread(work_thread, ref(run_flag), ref(server_handle)));
+		thread_pool.push_back(thread(work_thread, ref(run_flag), ref(server_handle), ref(receive_queue)));
+	}
+
+	//iocp发送线程
+	for (int i = 0; i < Send_Threads_Number; i++)
+	{
+		thread_pool.push_back(thread(send_thread, ref(run_flag), ref(server_handle), ref(send_queue)));
 	}
 
 	//iocp清理线程
 	thread_pool.push_back(thread(clean_thread, ref(run_flag), ref(server_handle)));
 
 	//应用线程
-	thread_pool.push_back(thread(application_thread, ref(run_flag), ref(server_handle)));
+	thread_pool.push_back(thread(application_thread, ref(run_flag), ref(server_handle), ref(receive_queue), ref(send_queue)));
 
 	while (TRUE)
 	{
