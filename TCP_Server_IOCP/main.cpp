@@ -56,20 +56,20 @@ int main()
 	//iocp工作线程
 	for (int i = 0; i < Worker_Threads_Number; i++)
 	{
-		thread_pool.push_back(thread(work_thread, ref(run_flag), ref(server_handle), ref(receive_queue)));
+		thread_pool.emplace_back(work_thread, ref(run_flag), ref(server_handle), ref(receive_queue));
 	}
 
 	//iocp发送线程
 	for (int i = 0; i < Send_Threads_Number; i++)
 	{
-		thread_pool.push_back(thread(send_thread, ref(run_flag), ref(server_handle), ref(send_queue)));
+		thread_pool.emplace_back(send_thread, ref(run_flag), ref(server_handle), ref(send_queue));
 	}
 
 	//iocp清理线程
-	thread_pool.push_back(thread(clean_thread, ref(run_flag), ref(server_handle)));
+	thread_pool.emplace_back(clean_thread, ref(run_flag), ref(server_handle));
 
 	//应用线程
-	thread_pool.push_back(thread(application_thread, ref(run_flag), ref(server_handle), ref(receive_queue), ref(send_queue)));
+	thread_pool.emplace_back(application_thread, ref(run_flag), ref(server_handle), ref(receive_queue), ref(send_queue));
 
 	while (TRUE)
 	{
@@ -81,7 +81,10 @@ int main()
 		}
 		else if (c == 'i')
 		{
-			cout << "current clients number is " << server_handle.client_handles.size() << endl;
+			cout << "=====================================================================" << endl;
+			cout << "total clients number is " << server_handle.client_handles.size() << endl;
+			cout << "connected clients number is " << server_handle.client_handles.size() - Worker_Threads_Number << endl;
+			cout << "=====================================================================" << endl;
 		}
 	}
 

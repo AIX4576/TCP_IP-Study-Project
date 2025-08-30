@@ -4,9 +4,9 @@
 #include<chrono>
 #include<list>
 #include<string>
-#include<map>
 #include<unordered_map>
 #include<mutex>
+#include<shared_mutex>
 #include<atomic>
 using namespace std;
 
@@ -20,9 +20,9 @@ using namespace std;
 
 #define Server_Port 8080
 
-#define Worker_Threads_Number 4
-#define Send_Threads_Number 2
-#define Max_Clients_Number 1000000
+#define Worker_Threads_Number (std::thread::hardware_concurrency() / 4 * 3)
+#define Send_Threads_Number (std::thread::hardware_concurrency() / 4)
+#define Max_Clients_Number 1024
 
 #define Receive_Data_Length 0
 #define Local_Address_Length (sizeof(SOCKADDR_IN) + 16)
@@ -415,7 +415,8 @@ class Server_Handle
 {
 public:
 	unordered_map<SOCKET, Client_Handle> client_handles;
-	mutex client_handles_mutex; 
+	vector<unique_ptr<shared_mutex>> buckets_shared_mutexes;
+	mutex global_mutex;
 
 	Server_Handle();
 	Server_Handle(Server_Handle&) = delete;

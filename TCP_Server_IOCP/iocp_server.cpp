@@ -61,6 +61,13 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	//将socket和完成端口绑定
 	CreateIoCompletionPort((HANDLE)socket, iocp, (ULONG_PTR)this, 0);
 
+	//初始化client_handles的桶数量，桶数量为 Max_Clients_Number ，保证永远不会触发rehash操作
+	client_handles.reserve(Max_Clients_Number);
+	cout << "client_handles buckets count is " << client_handles.bucket_count() << endl;
+
+	//构造多个shared_mutex
+	buckets_shared_mutexes.insert(buckets_shared_mutexes.end(), Max_Clients_Number, );
+	
 	//投递异步accept请求，投递多个
 	for (int i = 0; i < Worker_Threads_Number; i++)
 	{
@@ -76,7 +83,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 			continue;
 		}
 
-		lock_guard<mutex> lock(client_handles_mutex);
+		lock_guard<mutex> lock{ global_mutex };
 		client_handles.emplace(temp_client.socket, move(temp_client));
 
 		Client_Handle& client_handle = client_handles.at(pEvent->socket);
@@ -135,14 +142,18 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 		if (result)
 		{
 			// 成功！我们可以继续处理这个完成的I/O任务
+
 			if (completion_key != (ULONG_PTR)&server_handle)
 			{
 				continue;
 			}
 
 			Event_handle* pEvent = (Event_handle*)pOverlapped;
-			auto it = server_handle.client_handles.find(pEvent->socket);
+			auto hasher = server_handle.client_handles.hash_function();
+			size_t bucket_index = hasher(pEvent->socket);
+			unique_lock<shared_mutex> lock{ server_handle.buckets_shared_mutexes.at(bucket_index) };
 
+			auto it = server_handle.client_handles.find(pEvent->socket);
 			if (it == server_handle.client_handles.end())
 			{
 				delete pEvent;
@@ -151,6 +162,17 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 			}
 
 			Client_Handle& client_handle = it->second;
+
+			if ((pEvent->socket != client_handle.socket) || (client_handle.socket_status == Socket_Invalid))
+			{
+				cout << "error occur: pEvent->socket is [" << (int)pEvent->socket << "], but client_handle.socket is [" << (int)client_handle.socket << "]";
+				cout << "socket status is [" << (int)client_handle.socket_status << "]" << endl;
+
+				server_handle.client_handles.erase(it);
+				delete pEvent;
+
+				continue;
+			}
 
 			switch (pEvent->event)
 			{
@@ -213,14 +235,12 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 					}
 					else
 					{
-						lock_guard<mutex> lock{ server_handle.client_handles_mutex };
-						server_handle.client_handles.erase(client_handle.socket);
+						server_handle.client_handles.erase(it);
 					}
 				}
 				else
 				{
-					lock_guard<mutex> lock{ server_handle.client_handles_mutex };
-					server_handle.client_handles.erase(client_handle.socket);
+					server_handle.client_handles.erase(it);
 				}
 
 				//投递新的异步accept请求
@@ -230,7 +250,8 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 
 					if (temp_client.socket != INVALID_SOCKET)
 					{
-						lock_guard<mutex> lock(server_handle.client_handles_mutex);
+						//插入操作要锁全局锁，避免同时插入
+						lock_guard<mutex> lock(server_handle.global_mutex);
 
 						pEvent->socket = temp_client.socket;
 						server_handle.client_handles.emplace(temp_client.socket, move(temp_client));
@@ -288,8 +309,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 
 				if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 				{
-					lock_guard<mutex> lock(server_handle.client_handles_mutex);
-					server_handle.client_handles.erase(client_handle.socket);
+					server_handle.client_handles.erase(it);
 					delete pEvent;
 				}
 			}
@@ -301,6 +321,20 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 			break;
 			case Event_Receive:
 			{
+				//客户端异常关闭
+				if (bytes_transferred == 0)
+				{
+					size_t result = server_handle.client_handles.erase(pEvent->socket);
+					if (result)
+					{
+						cout << "client socket [" << (int)pEvent->socket << "] abnormal close" << endl;
+					}
+
+					delete pEvent;
+
+					break;
+				}
+
 				//更新最后活动时间
 				client_handle.Update_Last_Active_Time();
 
@@ -316,9 +350,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 				//若乱序数据缓冲区中积压的接收事件序列号数量超过阈值，说明可能存在数据丢失，此时应关闭连接
 				if (client_handle.Get_Unordered_Data_Number() > Per_Client_Unordered_Data_Number_Threshold)
 				{
-					lock_guard<mutex> lock{ server_handle.client_handles_mutex };
-					server_handle.client_handles.erase(client_handle.socket);
-
+					server_handle.client_handles.erase(it);
 					delete pEvent;
 
 					break;
@@ -351,9 +383,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 			break;
 			default:
 			{
-				lock_guard<mutex> lock{ server_handle.client_handles_mutex };
-				server_handle.client_handles.erase(client_handle.socket);
-
+				server_handle.client_handles.erase(it);
 				delete pEvent;
 			}
 			break;
@@ -378,14 +408,19 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 					if ((bytes_transferred == 0) &&
 						((error1 == ERROR_OPERATION_ABORTED) || (error1 == ERROR_NETNAME_DELETED) || (error1 == ERROR_SUCCESS) || (error2 == WSAECONNRESET)))
 					{
+						auto hasher = server_handle.client_handles.hash_function();
+						size_t bucket_index = hasher(pEvent->socket);
+						unique_lock<shared_mutex> lock{ server_handle.buckets_shared_mutexes.at(bucket_index) };
+
 						auto it1 = server_handle.client_handles.find(pEvent->socket);
 						if (it1 != server_handle.client_handles.end())
 						{
 							//当socket断开连接时，所有未完成的异步操作都会被系统强制完成，并通过完成端口（IOCP）机制通知应用程序
-							cout << "client socket [" << (int)pEvent->socket << "] close" << endl;
-
-							lock_guard<mutex> lock{ server_handle.client_handles_mutex };
-							server_handle.client_handles.erase(pEvent->socket);
+							size_t result = server_handle.client_handles.erase(pEvent->socket);
+							if (result)
+							{
+								cout << "client socket [" << (int)pEvent->socket << "] close" << endl;
+							}
 						}
 					}
 				}
@@ -404,6 +439,10 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 	{
 		while (send_queue.try_dequeue(message))
 		{
+			auto hasher = server_handle.client_handles.hash_function();
+			size_t bucket_index = hasher(message.socket);
+			shared_lock<shared_mutex> lock{ server_handle.buckets_shared_mutexes.at(bucket_index) };
+
 			auto it = server_handle.client_handles.find(message.socket);
 			if (it != server_handle.client_handles.end())
 			{
@@ -423,28 +462,28 @@ void clean_thread(bool& run_flag, Server_Handle& server_handle)
 
 	while (run_flag)
 	{
-		//每 Client_Active_Timeout_Scan_Interval 秒遍历一次所有 client_handles ，把活动超时的 socket 断开连接
+		//每 Client_Active_Timeout_Scan_Interval 秒遍历一次所有 client_handles ，把活动超时的socket断开连接，把socket status为invalid的client_handle清除
 		auto current_time = chrono::system_clock::now();
 		if (chrono::duration_cast<chrono::seconds>(current_time - last_scan_time).count() > Client_Active_Timeout_Scan_Interval)
 		{
 			last_scan_time = current_time;
 
-			lock_guard<mutex> lock{ server_handle.client_handles_mutex };
+			//
 
 			// 用迭代器遍历，避免范围for的隐式迭代器失效问题
-			auto it = server_handle.client_handles.begin();
-			while (it != server_handle.client_handles.end())
-			{
-				if (it->second.Is_Active_Timeout())
-				{
-					// erase返回下一个有效迭代器，避免失效
-					it = server_handle.client_handles.erase(it);
-				}
-				else
-				{
-					it++;
-				}
-			}
+			//auto it = server_handle.client_handles.begin();
+			//while (it != server_handle.client_handles.end())
+			//{
+			//	if (it->second.Is_Active_Timeout() || (it->second.socket_status == Socket_Invalid))
+			//	{
+			//		// erase返回下一个有效迭代器，避免失效
+			//		it = server_handle.client_handles.erase(it);
+			//	}
+			//	else
+			//	{
+			//		it++;
+			//	}
+			//}
 		}
 
 		this_thread::sleep_for(chrono::seconds(3));
