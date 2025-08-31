@@ -61,12 +61,17 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	//将socket和完成端口绑定
 	CreateIoCompletionPort((HANDLE)socket, iocp, (ULONG_PTR)this, 0);
 
-	//初始化client_handles的桶数量，桶数量为 Max_Clients_Number ，保证永远不会触发rehash操作
+	//初始化client_handles的桶数量为 Max_Clients_Number ，保证永远不会触发rehash操作
 	client_handles.reserve(Max_Clients_Number);
 	cout << "client_handles buckets count is " << client_handles.bucket_count() << endl;
 
-	//构造多个shared_mutex
-	buckets_shared_mutexes.insert(buckets_shared_mutexes.end(), Max_Clients_Number, );
+	//初始化buckets_shared_mutexes的容量为 Max_Clients_Number ，构造多个shared_mutex
+	buckets_shared_mutexes.reserve(Max_Clients_Number);
+	for (int i = 0; i < Max_Clients_Number; i++)
+	{
+		buckets_shared_mutexes.emplace_back(make_unique<shared_mutex>());
+	}
+
 	
 	//投递异步accept请求，投递多个
 	for (int i = 0; i < Worker_Threads_Number; i++)
@@ -149,9 +154,8 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 			}
 
 			Event_handle* pEvent = (Event_handle*)pOverlapped;
-			auto hasher = server_handle.client_handles.hash_function();
-			size_t bucket_index = hasher(pEvent->socket);
-			unique_lock<shared_mutex> lock{ server_handle.buckets_shared_mutexes.at(bucket_index) };
+			size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket);
+			unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
 			auto it = server_handle.client_handles.find(pEvent->socket);
 			if (it == server_handle.client_handles.end())
@@ -408,9 +412,8 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 					if ((bytes_transferred == 0) &&
 						((error1 == ERROR_OPERATION_ABORTED) || (error1 == ERROR_NETNAME_DELETED) || (error1 == ERROR_SUCCESS) || (error2 == WSAECONNRESET)))
 					{
-						auto hasher = server_handle.client_handles.hash_function();
-						size_t bucket_index = hasher(pEvent->socket);
-						unique_lock<shared_mutex> lock{ server_handle.buckets_shared_mutexes.at(bucket_index) };
+						size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket);
+						unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
 						auto it1 = server_handle.client_handles.find(pEvent->socket);
 						if (it1 != server_handle.client_handles.end())
@@ -439,9 +442,8 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 	{
 		while (send_queue.try_dequeue(message))
 		{
-			auto hasher = server_handle.client_handles.hash_function();
-			size_t bucket_index = hasher(message.socket);
-			shared_lock<shared_mutex> lock{ server_handle.buckets_shared_mutexes.at(bucket_index) };
+			size_t bucket_index = server_handle.client_handles.bucket(message.socket);
+			shared_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
 			auto it = server_handle.client_handles.find(message.socket);
 			if (it != server_handle.client_handles.end())
