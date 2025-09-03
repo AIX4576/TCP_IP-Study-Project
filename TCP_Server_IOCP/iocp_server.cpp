@@ -71,6 +71,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	{
 		buckets_shared_mutexes.emplace_back(make_unique<shared_mutex>());
 	}
+	cout << "buckets_shared_mutexes size is " << buckets_shared_mutexes.size() << endl;
 
 	
 	//投递异步accept请求，投递多个
@@ -154,34 +155,23 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 			}
 
 			Event_handle* pEvent = (Event_handle*)pOverlapped;
-			size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket);
-			unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
-
-			auto it = server_handle.client_handles.find(pEvent->socket);
-			if (it == server_handle.client_handles.end())
-			{
-				delete pEvent;
-
-				continue;
-			}
-
-			Client_Handle& client_handle = it->second;
-
-			if ((pEvent->socket != client_handle.socket) || (client_handle.socket_status == Socket_Invalid))
-			{
-				cout << "error occur: pEvent->socket is [" << (int)pEvent->socket << "], but client_handle.socket is [" << (int)client_handle.socket << "]";
-				cout << "socket status is [" << (int)client_handle.socket_status << "]" << endl;
-
-				server_handle.client_handles.erase(it);
-				delete pEvent;
-
-				continue;
-			}
-
 			switch (pEvent->event)
 			{
 			case Event_Accept_Connect:
 			{
+				size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket) % server_handle.buckets_shared_mutexes.size();
+				unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
+
+				auto it = server_handle.client_handles.find(pEvent->socket);
+				if (it == server_handle.client_handles.end())
+				{
+					delete pEvent;
+
+					break;
+				}
+
+				Client_Handle& client_handle = it->second;
+
 				//将新连接的 client socket 与 iocp 绑定，然后投递异步recv请求，投递多个
 				HANDLE iocp = CreateIoCompletionPort((HANDLE)client_handle.socket, server_handle.Get_IOCP(), (ULONG_PTR)&server_handle, 0);
 				if (iocp)
@@ -294,6 +284,19 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 			break;
 			case Event_Disconnect:
 			{
+				size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket) % server_handle.buckets_shared_mutexes.size();
+				unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
+
+				auto it = server_handle.client_handles.find(pEvent->socket);
+				if (it == server_handle.client_handles.end())
+				{
+					delete pEvent;
+
+					break;
+				}
+
+				Client_Handle& client_handle = it->second;
+
 				client_handle.Disonnect_Deal();
 
 				//复用该socket，继续投递异步accept请求(服务器使用DisconnectEx()主动断开socket连接才能复用)
@@ -325,6 +328,19 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 			break;
 			case Event_Receive:
 			{
+				size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket) % server_handle.buckets_shared_mutexes.size();
+				unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
+
+				auto it = server_handle.client_handles.find(pEvent->socket);
+				if (it == server_handle.client_handles.end())
+				{
+					delete pEvent;
+
+					break;
+				}
+
+				Client_Handle& client_handle = it->second;
+
 				//客户端异常关闭
 				if (bytes_transferred == 0)
 				{
@@ -387,6 +403,17 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 			break;
 			default:
 			{
+				size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket) % server_handle.buckets_shared_mutexes.size();
+				unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
+
+				auto it = server_handle.client_handles.find(pEvent->socket);
+				if (it == server_handle.client_handles.end())
+				{
+					delete pEvent;
+
+					break;
+				}
+
 				server_handle.client_handles.erase(it);
 				delete pEvent;
 			}
@@ -412,7 +439,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 					if ((bytes_transferred == 0) &&
 						((error1 == ERROR_OPERATION_ABORTED) || (error1 == ERROR_NETNAME_DELETED) || (error1 == ERROR_SUCCESS) || (error2 == WSAECONNRESET)))
 					{
-						size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket);
+						size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket) % server_handle.buckets_shared_mutexes.size();
 						unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
 						auto it1 = server_handle.client_handles.find(pEvent->socket);
@@ -442,7 +469,7 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 	{
 		while (send_queue.try_dequeue(message))
 		{
-			size_t bucket_index = server_handle.client_handles.bucket(message.socket);
+			size_t bucket_index = server_handle.client_handles.bucket(message.socket) % server_handle.buckets_shared_mutexes.size();
 			shared_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
 			auto it = server_handle.client_handles.find(message.socket);
@@ -470,22 +497,7 @@ void clean_thread(bool& run_flag, Server_Handle& server_handle)
 		{
 			last_scan_time = current_time;
 
-			//
-
-			// 用迭代器遍历，避免范围for的隐式迭代器失效问题
-			//auto it = server_handle.client_handles.begin();
-			//while (it != server_handle.client_handles.end())
-			//{
-			//	if (it->second.Is_Active_Timeout() || (it->second.socket_status == Socket_Invalid))
-			//	{
-			//		// erase返回下一个有效迭代器，避免失效
-			//		it = server_handle.client_handles.erase(it);
-			//	}
-			//	else
-			//	{
-			//		it++;
-			//	}
-			//}
+			
 		}
 
 		this_thread::sleep_for(chrono::seconds(3));

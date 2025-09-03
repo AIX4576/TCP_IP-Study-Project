@@ -222,6 +222,9 @@ public:
 			socket = INVALID_SOCKET;
 			socket_status = Socket_Invalid;
 		}
+
+		ordered_data.clear();
+		unordered_data.clear();
 	}
 	void Connect_Deal()
 	{
