@@ -20,6 +20,7 @@ using namespace std;
 
 #define Server_Port 8080
 
+#define Application_Threads_Number (std::thread::hardware_concurrency())
 #define Worker_Threads_Number (std::thread::hardware_concurrency() / 4 * 3)
 #define Send_Threads_Number (std::thread::hardware_concurrency() / 4)
 #define Max_Clients_Number 1024
@@ -35,6 +36,7 @@ using namespace std;
 #define Client_Active_Timeout_Second 180
 #define Client_Active_Timeout_Scan_Interval 60
 #define Event_Buffer_Size 1500
+#define Each_Send_Queue_Limit_Send_Count 5
 
 enum Socket_Status
 {
@@ -222,9 +224,6 @@ public:
 			socket = INVALID_SOCKET;
 			socket_status = Socket_Invalid;
 		}
-
-		ordered_data.clear();
-		unordered_data.clear();
 	}
 	void Connect_Deal()
 	{
@@ -349,6 +348,9 @@ public:
 		else
 		{
 			// 4. id小于期望的序列号（已处理过的重复数据）
+			lock.clear(memory_order_release);
+
+			return FALSE;
 		}
 
 		lock.clear(memory_order_release);
@@ -502,11 +504,21 @@ public:
 		closesocket(socket);
 		socket = INVALID_SOCKET;
 	}
+	size_t Socket_Map_In_Range(SOCKET socket, size_t range)
+	{
+		if (range == 0)
+		{
+			return 0;
+		}
+
+		return hasher_socket(socket) % range;
+	}
 
 private:
 	SOCKET socket;
 	HANDLE iocp;
 	bool initialize_flag;
+	hash<SOCKET> hasher_socket;
 };
 
 struct Message
@@ -543,6 +555,6 @@ struct Message
 	}
 };
 
-void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::ConcurrentQueue<Message>& receive_queue);
-void send_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::ConcurrentQueue<Message>& send_queue);
+void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Message>>& receive_queues);
+void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Message>>& send_queues);
 void clean_thread(bool& run_flag, Server_Handle& server_handle);

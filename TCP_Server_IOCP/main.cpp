@@ -1,28 +1,5 @@
 #include"iocp_server.h"
-#include"frame.h"
-
-class Device_Handle
-{
-	
-};
-
-void application_thread(bool& run_flag,
-	Server_Handle& server_handle,
-	moodycamel::ConcurrentQueue<Message>& receive_queue,
-	moodycamel::ConcurrentQueue<Message>& send_queue)
-{
-	Message message;
-
-	while (run_flag)
-	{
-		while (receive_queue.try_dequeue(message))
-		{
-			send_queue.enqueue(move(message));
-		}
-
-		this_thread::sleep_for(chrono::milliseconds(10));
-	}
-}
+#include"application_layer.h"
 
 int main()
 {
@@ -46,30 +23,41 @@ int main()
 	}
 
 	//创建无锁并发队列
-	moodycamel::ConcurrentQueue<Message> receive_queue;
-	moodycamel::ConcurrentQueue<Message> send_queue;
+	vector<moodycamel::ConcurrentQueue<Message>> receive_queues;
+	vector<moodycamel::ConcurrentQueue<Message>> send_queues;
+	receive_queues.reserve(Application_Threads_Number);
+	send_queues.reserve(Application_Threads_Number);
+	for (uint32_t i = 0; i < Application_Threads_Number; i++)
+	{
+		receive_queues.emplace_back();
+		send_queues.emplace_back();
+	}
+	cout << "application threads number is " << Application_Threads_Number << endl;
 
 	//创建线程池
 	bool run_flag = TRUE;
 	list<thread> thread_pool;
 
 	//iocp工作线程
-	for (int i = 0; i < Worker_Threads_Number; i++)
+	for (uint32_t i = 0; i < Worker_Threads_Number; i++)
 	{
-		thread_pool.emplace_back(work_thread, ref(run_flag), ref(server_handle), ref(receive_queue));
+		thread_pool.emplace_back(work_thread, ref(run_flag), ref(server_handle), ref(receive_queues));
 	}
 
 	//iocp发送线程
-	for (int i = 0; i < Send_Threads_Number; i++)
+	for (uint32_t i = 0; i < Send_Threads_Number; i++)
 	{
-		thread_pool.emplace_back(send_thread, ref(run_flag), ref(server_handle), ref(send_queue));
+		thread_pool.emplace_back(send_thread, ref(run_flag), ref(server_handle), ref(send_queues));
 	}
 
 	//iocp清理线程
 	thread_pool.emplace_back(clean_thread, ref(run_flag), ref(server_handle));
 
 	//应用线程
-	thread_pool.emplace_back(application_thread, ref(run_flag), ref(server_handle), ref(receive_queue), ref(send_queue));
+	for (uint32_t i = 0; i < Application_Threads_Number; i++)
+	{
+		thread_pool.emplace_back(application_thread, ref(run_flag), ref(server_handle), ref(receive_queues.at(i)), ref(send_queues.at(i)));
+	}
 
 	while (TRUE)
 	{
@@ -89,7 +77,7 @@ int main()
 	}
 
 	server_handle.Close_Socket();
-	this_thread::sleep_for(chrono::milliseconds(500));
+	this_thread::sleep_for(chrono::seconds(1));
 	run_flag = FALSE;
 
 	for (thread& item : thread_pool)

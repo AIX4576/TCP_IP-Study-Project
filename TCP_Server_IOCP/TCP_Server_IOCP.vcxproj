@@ -133,9 +133,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\include\frame.h" />
+    <ClInclude Include="application_layer.h" />
     <ClInclude Include="iocp_server.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="application_layer.cpp" />
     <ClCompile Include="iocp_server.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="override_new_delete.cpp" />

@@ -11,7 +11,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 		return;
 	}
 
-	int result;
+	int result = -1;
 	sockaddr_in address_server
 	{
 		.sin_family = AF_INET,
@@ -61,13 +61,13 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	//将socket和完成端口绑定
 	CreateIoCompletionPort((HANDLE)socket, iocp, (ULONG_PTR)this, 0);
 
-	//初始化client_handles的桶数量为 Max_Clients_Number ，保证永远不会触发rehash操作
-	client_handles.reserve(Max_Clients_Number);
+	//初始化client_handles的桶数量为 Max_Clients_Number * 1.2，保证永远不会触发rehash操作
+	client_handles.reserve((size_t)(Max_Clients_Number * 1.2));
 	cout << "client_handles buckets count is " << client_handles.bucket_count() << endl;
 
-	//初始化buckets_shared_mutexes的容量为 Max_Clients_Number ，构造多个shared_mutex
-	buckets_shared_mutexes.reserve(Max_Clients_Number);
-	for (int i = 0; i < Max_Clients_Number; i++)
+	//初始化buckets_shared_mutexes的容量为 client_handles.bucket_count() ，构造多个shared_mutex
+	buckets_shared_mutexes.reserve(client_handles.bucket_count());
+	for (int i = 0; i < buckets_shared_mutexes.capacity(); i++)
 	{
 		buckets_shared_mutexes.emplace_back(make_unique<shared_mutex>());
 	}
@@ -75,7 +75,8 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 
 	
 	//投递异步accept请求，投递多个
-	for (int i = 0; i < Worker_Threads_Number; i++)
+	lock_guard<mutex> lock{ global_mutex };
+	for (uint32_t i = 0; i < Worker_Threads_Number; i++)
 	{
 		Client_Handle temp_client;
 		if (temp_client.socket == INVALID_SOCKET)
@@ -89,7 +90,6 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 			continue;
 		}
 
-		lock_guard<mutex> lock{ global_mutex };
 		client_handles.emplace(temp_client.socket, move(temp_client));
 
 		Client_Handle& client_handle = client_handles.at(pEvent->socket);
@@ -124,7 +124,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	}
 }
 
-void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::ConcurrentQueue<Message>& receive_queue)
+void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Message>>& receive_queues)
 {
 	DWORD bytes_transferred = 0;
 	ULONG_PTR completion_key = 0;
@@ -364,7 +364,8 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 				//若有序数据缓冲区的数据足够组成完整消息，则提交给业务层
 				if (client_handle.Get_Ordered_Data_Size() >= Completed_Message_Size_Threshold)
 				{
-					receive_queue.enqueue(Message{ client_handle.socket,client_handle.Get_Ordered_Data() });
+					size_t queue_index = server_handle.Socket_Map_In_Range(client_handle.socket, receive_queues.size());
+					receive_queues.at(queue_index).enqueue(Message{ client_handle.socket,client_handle.Get_Ordered_Data() });
 				}
 
 				//若乱序数据缓冲区中积压的接收事件序列号数量超过阈值，说明可能存在数据丢失，此时应关闭连接
@@ -461,24 +462,37 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::Concu
 	}
 }
 
-void send_thread(bool& run_flag, Server_Handle& server_handle, moodycamel::ConcurrentQueue<Message>& send_queue)
+void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Message>>& send_queues)
 {
 	Message message;
 
 	while (run_flag)
 	{
-		while (send_queue.try_dequeue(message))
+		auto it = send_queues.begin();
+		while (it != send_queues.end())
 		{
-			size_t bucket_index = server_handle.client_handles.bucket(message.socket) % server_handle.buckets_shared_mutexes.size();
-			shared_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
-
-			auto it = server_handle.client_handles.find(message.socket);
-			if (it != server_handle.client_handles.end())
+			int count = 0;
+			while (it->try_dequeue(message))
 			{
-				Client_Handle& client_handle = it->second;
+				size_t bucket_index = server_handle.client_handles.bucket(message.socket) % server_handle.buckets_shared_mutexes.size();
+				shared_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
-				client_handle.Send_Data_Ex(message.data.data(), message.data.size());
+				auto it1 = server_handle.client_handles.find(message.socket);
+				if (it1 != server_handle.client_handles.end())
+				{
+					Client_Handle& client_handle = it1->second;
+
+					client_handle.Send_Data_Ex(message.data.data(), (uint32_t)message.data.size());
+
+					count++;
+					if (count > Each_Send_Queue_Limit_Send_Count)
+					{
+						break;
+					}
+				}
 			}
+
+			it++;
 		}
 
 		this_thread::sleep_for(chrono::milliseconds(5));
