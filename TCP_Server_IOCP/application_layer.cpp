@@ -11,7 +11,10 @@ void application_thread(bool& run_flag,
 	{
 		while (receive_queue.try_dequeue(message))
 		{
-			send_queue.enqueue(move(message));
+			if(message.data.size())
+			{
+				send_queue.enqueue(move(message));
+			}
 		}
 
 		this_thread::sleep_for(chrono::milliseconds(10));

@@ -32,7 +32,7 @@ using namespace std;
 #define Per_Client_Receive_Event_Number 3
 #define Per_Client_Ordered_Data_Default_Capacity (1024 * 16)
 #define Per_Client_Unordered_Data_Number_Threshold 8
-#define Completed_Message_Size_Threshold 8
+#define Completed_Message_Size_Threshold 32
 #define Client_Active_Timeout_Second 180
 #define Client_Active_Timeout_Scan_Interval 60
 #define Event_Buffer_Size 1500
@@ -183,6 +183,7 @@ public:
 			swap(ordered_data, other.ordered_data);
 			swap(unordered_data, other.unordered_data);
 			swap(last_active_time, other.last_active_time);
+			swap(completed_message_size_threshold, other.completed_message_size_threshold);
 		}
 	}
 	Client_Handle& operator=(Client_Handle&& other) noexcept
@@ -211,6 +212,7 @@ public:
 			swap(ordered_data, other.ordered_data);
 			swap(unordered_data, other.unordered_data);
 			swap(last_active_time, other.last_active_time);
+			swap(completed_message_size_threshold, other.completed_message_size_threshold);
 		}
 
 		return *this;
@@ -272,6 +274,14 @@ public:
 	size_t Make_Receive_Event_id()
 	{
 		return receive_event_sequence.fetch_add(1, memory_order_release);
+	}
+	void Set_Completed_Message_Size_Threshold(size_t value)
+	{
+		completed_message_size_threshold = value;
+	}
+	size_t Get_Completed_Message_Size_Threshold()
+	{
+		return completed_message_size_threshold;
 	}
 	size_t Get_Unordered_Data_Number()
 	{
@@ -357,15 +367,19 @@ public:
 
 		return TRUE;
 	}
-	bool Send_Data_Ex(const char* data, uint32_t size)
+	bool Send_Data_Ex(const char* data, size_t size)
 	{
 		if (socket_status != Socket_Connected)
 		{
 			return FALSE;
 		}
+		if (size == 0)
+		{
+			return FALSE;
+		}
 
 		//投递异步send请求
-		Event_handle* pEvent = new Event_handle{ socket,Event_Send ,TRUE,size };
+		Event_handle* pEvent = new Event_handle{ socket,Event_Send ,TRUE,(uint32_t)size };
 		if (pEvent)
 		{
 			if (pEvent->buffer.buf)
@@ -414,6 +428,7 @@ private:
 	string ordered_data;//有序数据缓冲区
 	unordered_map<size_t, string> unordered_data;//乱序数据缓冲区
 	chrono::system_clock::time_point last_active_time{};//最后活动时间
+	size_t completed_message_size_threshold = Completed_Message_Size_Threshold;
 };
 
 class Server_Handle
@@ -512,6 +527,22 @@ public:
 		}
 
 		return hasher_socket(socket) % range;
+	}
+	bool Set_Completed_Message_Size_Threshold(SOCKET socket, size_t value)
+	{
+		size_t bucket_index = client_handles.bucket(socket) % buckets_shared_mutexes.size();
+		shared_lock<shared_mutex> lock{ *(buckets_shared_mutexes.at(bucket_index)) };
+
+		auto it = client_handles.find(socket);
+		if (it == client_handles.end())
+		{
+			return false;
+		}
+
+		Client_Handle& client_handle = it->second;
+		client_handle.Set_Completed_Message_Size_Threshold(value);
+
+		return true;
 	}
 
 private:

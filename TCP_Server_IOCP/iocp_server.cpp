@@ -344,6 +344,14 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				//客户端异常关闭
 				if (bytes_transferred == 0)
 				{
+					//把有序数据缓冲区的数据全部交给业务层，同时发送一个包含空string的message给业务层，表示连接已断开
+					size_t queue_index = server_handle.Socket_Map_In_Range(client_handle.socket, receive_queues.size());
+					if (client_handle.Get_Ordered_Data_Size())
+					{
+						receive_queues.at(queue_index).enqueue(Message{ client_handle.socket,client_handle.Get_Ordered_Data() });
+					}
+					receive_queues.at(queue_index).enqueue(Message{ client_handle.socket ,string() });
+
 					size_t result = server_handle.client_handles.erase(pEvent->socket);
 					if (result)
 					{
@@ -362,7 +370,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				client_handle.Sort_Receive_Data(pEvent, bytes_transferred);
 
 				//若有序数据缓冲区的数据足够组成完整消息，则提交给业务层
-				if (client_handle.Get_Ordered_Data_Size() >= Completed_Message_Size_Threshold)
+				if (client_handle.Get_Ordered_Data_Size() >= client_handle.Get_Completed_Message_Size_Threshold())
 				{
 					size_t queue_index = server_handle.Socket_Map_In_Range(client_handle.socket, receive_queues.size());
 					receive_queues.at(queue_index).enqueue(Message{ client_handle.socket,client_handle.Get_Ordered_Data() });
@@ -446,6 +454,18 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						auto it1 = server_handle.client_handles.find(pEvent->socket);
 						if (it1 != server_handle.client_handles.end())
 						{
+							Client_Handle& client_handle = it1->second;
+							if (client_handle.socket_status == Socket_Connected)
+							{
+								//把有序数据缓冲区的数据全部交给业务层，同时发送一个包含空string的message给业务层，表示连接已断开
+								size_t queue_index = server_handle.Socket_Map_In_Range(client_handle.socket, receive_queues.size());
+								if (client_handle.Get_Ordered_Data_Size())
+								{
+									receive_queues.at(queue_index).enqueue(Message{ client_handle.socket,client_handle.Get_Ordered_Data() });
+								}
+								receive_queues.at(queue_index).enqueue(Message{ client_handle.socket ,string() });
+							}
+
 							//当socket断开连接时，所有未完成的异步操作都会被系统强制完成，并通过完成端口（IOCP）机制通知应用程序
 							size_t result = server_handle.client_handles.erase(pEvent->socket);
 							if (result)
@@ -481,8 +501,12 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				if (it1 != server_handle.client_handles.end())
 				{
 					Client_Handle& client_handle = it1->second;
+					size_t size = message.data.size();
 
-					client_handle.Send_Data_Ex(message.data.data(), (uint32_t)message.data.size());
+					if(size)
+					{
+						client_handle.Send_Data_Ex(message.data.data(), size);
+					}
 
 					count++;
 					if (count > Each_Send_Queue_Limit_Send_Count)
