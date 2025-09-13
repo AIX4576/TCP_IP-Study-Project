@@ -132,7 +132,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="..\include\frame.h" />
     <ClInclude Include="application_layer.h" />
     <ClInclude Include="iocp_server.h" />
   </ItemGroup>

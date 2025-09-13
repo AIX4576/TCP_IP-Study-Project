@@ -3,10 +3,6 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.12.35527.113
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TCP_Server", "Hello_Socket\Hello_Socket.vcxproj", "{AD7CB76E-3FFF-46D0-B571-0D6916E33C59}"
-EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TCP_Client", "TCP_Client\TCP_Client.vcxproj", "{CAACFB32-B1E0-4A8E-829E-D98DB3BEA2E4}"
-EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TCP_Server_IOCP", "TCP_Server_IOCP\TCP_Server_IOCP.vcxproj", "{2759A002-8927-4505-BC63-92B79F4D4714}"
 EndProject
 Global
@@ -17,22 +13,6 @@ Global
 		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{AD7CB76E-3FFF-46D0-B571-0D6916E33C59}.Debug|x64.ActiveCfg = Debug|x64
-		{AD7CB76E-3FFF-46D0-B571-0D6916E33C59}.Debug|x64.Build.0 = Debug|x64
-		{AD7CB76E-3FFF-46D0-B571-0D6916E33C59}.Debug|x86.ActiveCfg = Debug|Win32
-		{AD7CB76E-3FFF-46D0-B571-0D6916E33C59}.Debug|x86.Build.0 = Debug|Win32
-		{AD7CB76E-3FFF-46D0-B571-0D6916E33C59}.Release|x64.ActiveCfg = Release|x64
-		{AD7CB76E-3FFF-46D0-B571-0D6916E33C59}.Release|x64.Build.0 = Release|x64
-		{AD7CB76E-3FFF-46D0-B571-0D6916E33C59}.Release|x86.ActiveCfg = Release|Win32
-		{AD7CB76E-3FFF-46D0-B571-0D6916E33C59}.Release|x86.Build.0 = Release|Win32
-		{CAACFB32-B1E0-4A8E-829E-D98DB3BEA2E4}.Debug|x64.ActiveCfg = Debug|x64
-		{CAACFB32-B1E0-4A8E-829E-D98DB3BEA2E4}.Debug|x64.Build.0 = Debug|x64
-		{CAACFB32-B1E0-4A8E-829E-D98DB3BEA2E4}.Debug|x86.ActiveCfg = Debug|Win32
-		{CAACFB32-B1E0-4A8E-829E-D98DB3BEA2E4}.Debug|x86.Build.0 = Debug|Win32
-		{CAACFB32-B1E0-4A8E-829E-D98DB3BEA2E4}.Release|x64.ActiveCfg = Release|x64
-		{CAACFB32-B1E0-4A8E-829E-D98DB3BEA2E4}.Release|x64.Build.0 = Release|x64
-		{CAACFB32-B1E0-4A8E-829E-D98DB3BEA2E4}.Release|x86.ActiveCfg = Release|Win32
-		{CAACFB32-B1E0-4A8E-829E-D98DB3BEA2E4}.Release|x86.Build.0 = Release|Win32
 		{2759A002-8927-4505-BC63-92B79F4D4714}.Debug|x64.ActiveCfg = Debug|x64
 		{2759A002-8927-4505-BC63-92B79F4D4714}.Debug|x64.Build.0 = Debug|x64
 		{2759A002-8927-4505-BC63-92B79F4D4714}.Debug|x86.ActiveCfg = Debug|Win32

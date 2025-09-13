@@ -15,9 +15,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\include\frame.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
     <ClInclude Include="iocp_server.h">
       <Filter>头文件</Filter>
     </ClInclude>

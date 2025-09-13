@@ -3,7 +3,6 @@
 using namespace std;
 
 #include"iocp_server.h"
-#include"frame.h"
 #include"concurrentqueue.h"
 
 void application_thread(bool& run_flag,
