@@ -10,6 +10,7 @@
 #include<atomic>
 using namespace std;
 
+#include"boost/thread/shared_mutex.hpp"
 #include"concurrentqueue.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -35,7 +36,7 @@ using namespace std;
 #define Completed_Message_Size_Threshold 32
 #define Client_Active_Timeout_Second 180
 #define Client_Active_Timeout_Scan_Interval 60
-#define Event_Buffer_Size 1500
+#define Event_Buffer_Size 1460
 #define Each_Send_Queue_Limit_Send_Count 5
 
 enum Socket_Status
@@ -62,26 +63,17 @@ public:
 	Deliver_Event event;
 	DWORD flag{};//WSARecv()要用到，默认是0
 	WSABUF buffer{};//WSARecv()和WSASend()要用到
+	char data[Event_Buffer_Size]{};//数据缓冲区
 
-	Event_handle(bool allocate_buffer, uint32_t buffer_size = Event_Buffer_Size, size_t event_id = 0) : socket(INVALID_SOCKET), event(Event_None)
+	Event_handle(size_t event_id = 0) : socket(INVALID_SOCKET), event(Event_None), id(event_id)
 	{
-		if(allocate_buffer)
-		{
-			buffer.buf = new char[buffer_size] {};
-			buffer.len = buffer.buf ? buffer_size : 0;
-		}
-
-		id = event_id;
+		buffer.buf = data;
+		buffer.len = Event_Buffer_Size;
 	}
-	Event_handle(SOCKET socket, Deliver_Event event, bool allocate_buffer, uint32_t buffer_size = Event_Buffer_Size, size_t event_id = 0) : socket(socket), event(event)
+	Event_handle(SOCKET socket, Deliver_Event event, uint32_t buffer_size = Event_Buffer_Size, size_t event_id = 0) : socket(socket), event(event), id(event_id)
 	{
-		if (allocate_buffer)
-		{
-			buffer.buf = new char[buffer_size] {};
-			buffer.len = buffer.buf ? buffer_size : 0;
-		}
-
-		id = event_id;
+		buffer.buf = data;
+		buffer.len = min(buffer_size, Event_Buffer_Size);
 	}
 	Event_handle(Event_handle&) = delete;
 	Event_handle& operator=(const Event_handle&) = delete;
@@ -97,7 +89,8 @@ public:
 			swap(socket, other.socket);
 			swap(event, other.event);
 			swap(flag, other.flag);
-			swap(buffer, other.buffer);
+			buffer.len = other.buffer.len;
+			memcpy(data, other.data, Event_Buffer_Size);
 			swap(id, other.id);
 		}
 	}
@@ -106,32 +99,18 @@ public:
 		//移动赋值函数，将自身资源释放后置0，然后交换
 		if (this != &other)
 		{
-			if (buffer.buf)
-			{
-				delete[] buffer.buf;
-				buffer.buf = NULL;
-				buffer.len = 0;
-			}
-
 			swap(overlapped, other.overlapped);
 			swap(socket, other.socket);
 			swap(event, other.event);
 			swap(flag, other.flag);
-			swap(buffer, other.buffer);
+			buffer.len = other.buffer.len;
+			memcpy(data, other.data, Event_Buffer_Size);
 			swap(id, other.id);
 		}
 
 		return *this;
 	}
-	~Event_handle()
-	{
-		if (buffer.buf)
-		{
-			delete[] buffer.buf;
-			buffer.buf = NULL;
-			buffer.len = 0;
-		}
-	}
+	~Event_handle() {}
 	size_t Get_id() const
 	{
 		return id;

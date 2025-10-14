@@ -19,7 +19,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 		.sin_addr = INADDR_ANY,
 	};
 
-	result = bind(socket, (sockaddr*)&address_server, sizeof(address_server));
+	result = ::bind(socket, (sockaddr*)&address_server, sizeof(address_server));
 	if (result == SOCKET_ERROR)
 	{
 		cout << "Error: socket bind port fail" << endl;
@@ -75,7 +75,6 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 
 	
 	//投递异步accept请求，投递多个
-	lock_guard<mutex> lock{ global_mutex };
 	for (uint32_t i = 0; i < Worker_Threads_Number; i++)
 	{
 		Client_Handle temp_client;
@@ -84,7 +83,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 			continue;
 		}
 
-		Event_handle* pEvent = new Event_handle{ temp_client.socket ,Event_Accept_Connect ,FALSE };
+		Event_handle* pEvent = new Event_handle{ temp_client.socket ,Event_Accept_Connect };
 		if (pEvent == NULL)
 		{
 			continue;
@@ -160,7 +159,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 			case Event_Accept_Connect:
 			{
 				size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket) % server_handle.buckets_shared_mutexes.size();
-				unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
+				shared_lock<shared_mutex> shared_lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
 				auto it = server_handle.client_handles.find(pEvent->socket);
 				if (it == server_handle.client_handles.end())
@@ -181,19 +180,14 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					for (int i = 0; i < Per_Client_Receive_Event_Number; i++)
 					{
 						Event_handle* pEvent1 = new Event_handle
-						{ client_handle.socket,
+						{
+							client_handle.socket,
 							Event_Receive,
-							TRUE,
 							Event_Buffer_Size,
 							client_handle.Make_Receive_Event_id()
 						};
 						if (pEvent1 == NULL)
 						{
-							continue;
-						}
-						if (pEvent1->buffer.buf == NULL)
-						{
-							delete pEvent1;
 							continue;
 						}
 
@@ -225,16 +219,31 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					if (count)
 					{
 						client_handle.Connect_Deal();
-						cout << "client [" << (int)client_handle.socket << "] connected, ip is " << client_handle.ip << ", port is " << client_handle.port << endl;
+						cout << "client [" << (int)client_handle.socket << "] connected, ip is [" << client_handle.ip << "], port is [" << client_handle.port << "]" << endl;
 					}
 					else
 					{
-						server_handle.client_handles.erase(it);
+						//往下涉及到 shared_mutex TODO
+						shared_lock.unlock();
+						unique_lock<shared_mutex> unique_lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
+
+						it = server_handle.client_handles.find(pEvent->socket);
+						if (it != server_handle.client_handles.end())
+						{
+							server_handle.client_handles.erase(it);
+						}
 					}
 				}
 				else
 				{
-					server_handle.client_handles.erase(it);
+					shared_lock.unlock();
+					unique_lock<shared_mutex> unique_lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
+
+					it = server_handle.client_handles.find(pEvent->socket);
+					if (it != server_handle.client_handles.end())
+					{
+						server_handle.client_handles.erase(it);
+					}
 				}
 
 				//投递新的异步accept请求
