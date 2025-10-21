@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 #include<iostream>
 #include<thread>
 #include<chrono>
@@ -10,14 +10,14 @@
 #include<atomic>
 using namespace std;
 
-#include"boost/thread/shared_mutex.hpp"
+#include"boost/pool/object_pool.hpp"
 #include"concurrentqueue.h"
 
 #define WIN32_LEAN_AND_MEAN
-#include<WS2tcpip.h> //»ù´¡Ì×½Ó×ÖAPIÍ·ÎÄ¼ş
-#include<MSWSock.h>	 //À©Õ¹Ì×½Ó×ÖAPIÍ·ÎÄ¼ş
-#pragma comment(lib, "ws2_32.lib")	// Á´½Ó»ù´¡Ì×½Ó×Ö¿â
-#pragma comment(lib, "mswsock.lib") // Á´½ÓÀ©Õ¹Ì×½Ó×Ö¿â
+#include<WS2tcpip.h> //åŸºç¡€å¥—æ¥å­—APIå¤´æ–‡ä»¶
+#include<MSWSock.h>	 //æ‰©å±•å¥—æ¥å­—APIå¤´æ–‡ä»¶
+#pragma comment(lib, "ws2_32.lib")	// é“¾æ¥åŸºç¡€å¥—æ¥å­—åº“
+#pragma comment(lib, "mswsock.lib") // é“¾æ¥æ‰©å±•å¥—æ¥å­—åº“
 
 #define Server_Port 8080
 
@@ -58,12 +58,12 @@ enum Deliver_Event
 struct Event_handle
 {
 public:
-	OVERLAPPED overlapped{};//±ØĞëÇåÁã OVERLAPPED ½á¹¹£¬·ñÔò¿ÉÄÜµ¼ÖÂÎ´¶¨ÒåĞĞÎª
+	OVERLAPPED overlapped{};//å¿…é¡»æ¸…é›¶ OVERLAPPED ç»“æ„ï¼Œå¦åˆ™å¯èƒ½å¯¼è‡´æœªå®šä¹‰è¡Œä¸º
 	SOCKET socket;
 	Deliver_Event event;
-	DWORD flag{};//WSARecv()ÒªÓÃµ½£¬Ä¬ÈÏÊÇ0
-	WSABUF buffer{};//WSARecv()ºÍWSASend()ÒªÓÃµ½
-	char data[Event_Buffer_Size]{};//Êı¾İ»º³åÇø
+	DWORD flag{};//WSARecv()è¦ç”¨åˆ°ï¼Œé»˜è®¤æ˜¯0
+	WSABUF buffer{};//WSARecv()å’ŒWSASend()è¦ç”¨åˆ°
+	char data[Event_Buffer_Size]{};//æ•°æ®ç¼“å†²åŒº
 
 	Event_handle(size_t event_id = 0) : socket(INVALID_SOCKET), event(Event_None), id(event_id)
 	{
@@ -79,7 +79,7 @@ public:
 	Event_handle& operator=(const Event_handle&) = delete;
 	Event_handle(Event_handle&& other) noexcept
 	{
-		//ÒÆ¶¯¹¹Ôìº¯Êı£¬½«×ÔÉí×ÊÔ´³õÊ¼»¯Îª0ºó½»»»
+		//ç§»åŠ¨æ„é€ å‡½æ•°ï¼Œå°†è‡ªèº«èµ„æºåˆå§‹åŒ–ä¸º0åäº¤æ¢
 		if (this != &other)
 		{
 			socket = INVALID_SOCKET;
@@ -90,13 +90,14 @@ public:
 			swap(event, other.event);
 			swap(flag, other.flag);
 			buffer.len = other.buffer.len;
+			buffer.buf = data;
 			memcpy(data, other.data, Event_Buffer_Size);
 			swap(id, other.id);
 		}
 	}
 	Event_handle& operator=(Event_handle&& other) noexcept
 	{
-		//ÒÆ¶¯¸³Öµº¯Êı£¬½«×ÔÉí×ÊÔ´ÊÍ·ÅºóÖÃ0£¬È»ºó½»»»
+		//ç§»åŠ¨èµ‹å€¼å‡½æ•°ï¼Œå°†è‡ªèº«èµ„æºé‡Šæ”¾åç½®0ï¼Œç„¶åäº¤æ¢
 		if (this != &other)
 		{
 			swap(overlapped, other.overlapped);
@@ -104,6 +105,7 @@ public:
 			swap(event, other.event);
 			swap(flag, other.flag);
 			buffer.len = other.buffer.len;
+			buffer.buf = data;
 			memcpy(data, other.data, Event_Buffer_Size);
 			swap(id, other.id);
 		}
@@ -131,7 +133,7 @@ public:
 	Socket_Status socket_status;
 	string ip;
 	uint16_t port{};
-	uint8_t output_buffer[Receive_Data_Length + Local_Address_Length + Remote_Address_Length]{};// µØÖ· + Êı¾İ
+	uint8_t output_buffer[Receive_Data_Length + Local_Address_Length + Remote_Address_Length]{};// åœ°å€ + æ•°æ®
 
 	Client_Handle() :socket(INVALID_SOCKET), socket_status(Socket_Invalid)
 	{
@@ -147,7 +149,7 @@ public:
 	Client_Handle& operator=(Client_Handle&) = delete;
 	Client_Handle(Client_Handle&& other) noexcept
 	{
-		//ÒÆ¶¯¹¹Ôìº¯Êı£¬½«×ÔÉí×ÊÔ´³õÊ¼»¯Îª0ºó½»»»
+		//ç§»åŠ¨æ„é€ å‡½æ•°ï¼Œå°†è‡ªèº«èµ„æºåˆå§‹åŒ–ä¸º0åäº¤æ¢
 		if (this != &other)
 		{
 			socket = INVALID_SOCKET;
@@ -167,7 +169,7 @@ public:
 	}
 	Client_Handle& operator=(Client_Handle&& other) noexcept
 	{
-		//ÒÆ¶¯¸³Öµº¯Êı£¬½«×ÔÉí×ÊÔ´ÊÍ·ÅºóÖÃ0£¬È»ºó½»»»
+		//ç§»åŠ¨èµ‹å€¼å‡½æ•°ï¼Œå°†è‡ªèº«èµ„æºé‡Šæ”¾åç½®0ï¼Œç„¶åäº¤æ¢
 		if (this != &other)
 		{
 			if (socket != INVALID_SOCKET)
@@ -272,7 +274,7 @@ public:
 	}
 	string Get_Ordered_Data()
 	{
-		// Ñ­»·³¢ÊÔ»ñÈ¡Ëø£¬test_and_set»áÔ­×ÓµØ½«lockÉèÎªtrue£¬²¢·µ»Ø²Ù×÷Ç°µÄÖµ
+		// å¾ªç¯å°è¯•è·å–é”ï¼Œtest_and_setä¼šåŸå­åœ°å°†lockè®¾ä¸ºtrueï¼Œå¹¶è¿”å›æ“ä½œå‰çš„å€¼
 		while (lock.test_and_set(memory_order_acquire))
 		{
 			this_thread::yield();
@@ -301,7 +303,7 @@ public:
 			return FALSE;
 		}
 
-		// Ñ­»·³¢ÊÔ»ñÈ¡Ëø£¬test_and_set»áÔ­×ÓµØ½«lockÉèÎªtrue£¬²¢·µ»Ø²Ù×÷Ç°µÄÖµ
+		// å¾ªç¯å°è¯•è·å–é”ï¼Œtest_and_setä¼šåŸå­åœ°å°†lockè®¾ä¸ºtrueï¼Œå¹¶è¿”å›æ“ä½œå‰çš„å€¼
 		while (lock.test_and_set(memory_order_acquire))
 		{
 			this_thread::yield();
@@ -310,33 +312,33 @@ public:
 		size_t event_id = event->Get_id();
 		if (event_id == next_expected_sequence)
 		{
-			// 1. Èôµ±Ç°receiveÊÂ¼şµÄidµÈÓÚÆÚÍûµÄĞòÁĞºÅ£¬Ö±½ÓÆ´½Ó
+			// 1. è‹¥å½“å‰receiveäº‹ä»¶çš„idç­‰äºæœŸæœ›çš„åºåˆ—å·ï¼Œç›´æ¥æ‹¼æ¥
 			ordered_data.append(event->buffer.buf, min(event->buffer.len, data_size));
-			next_expected_sequence++;// ÆÚÍûĞòÁĞºÅ+1
+			next_expected_sequence++;// æœŸæœ›åºåˆ—å·+1
 
-			// 2. ¼ì²éÂÒĞò»º³åÇø£¬´¦ÀíºóĞøÁ¬ĞøµÄĞòÁĞºÅ
+			// 2. æ£€æŸ¥ä¹±åºç¼“å†²åŒºï¼Œå¤„ç†åç»­è¿ç»­çš„åºåˆ—å·
 			auto it = unordered_data.find(next_expected_sequence);
 			while (it != unordered_data.end())
 			{
-				// Æ´½ÓÏÂÒ»¸öÁ¬ĞøÊı¾İ
+				// æ‹¼æ¥ä¸‹ä¸€ä¸ªè¿ç»­æ•°æ®
 				ordered_data += it->second;
-				next_expected_sequence++;// ÆÚÍûĞòÁĞºÅ+1
+				next_expected_sequence++;// æœŸæœ›åºåˆ—å·+1
 
-				//ÒÆ³ı¸ÃÊı¾İ
+				//ç§»é™¤è¯¥æ•°æ®
 				unordered_data.erase(it);
 
-				// ¼ÌĞø¼ì²éÏÂÒ»¸öĞòÁĞºÅ
+				// ç»§ç»­æ£€æŸ¥ä¸‹ä¸€ä¸ªåºåˆ—å·
 				it = unordered_data.find(next_expected_sequence);
 			}
 		}
 		else if (event_id > next_expected_sequence)
 		{
-			// 3. Èôid²»Á¬Ğø£¬´æÈëÂÒĞò»º³åÇø£¬½ö»º´æÎ´À´µÄĞòÁĞºÅ£¨±ÜÃâÖØ¸´/¹ıÆÚÊı¾İ£©
+			// 3. è‹¥idä¸è¿ç»­ï¼Œå­˜å…¥ä¹±åºç¼“å†²åŒºï¼Œä»…ç¼“å­˜æœªæ¥çš„åºåˆ—å·ï¼ˆé¿å…é‡å¤/è¿‡æœŸæ•°æ®ï¼‰
 			unordered_data.emplace(event_id, string(event->buffer.buf, min(event->buffer.len, data_size)));
 		}
 		else
 		{
-			// 4. idĞ¡ÓÚÆÚÍûµÄĞòÁĞºÅ£¨ÒÑ´¦Àí¹ıµÄÖØ¸´Êı¾İ£©
+			// 4. idå°äºæœŸæœ›çš„åºåˆ—å·ï¼ˆå·²å¤„ç†è¿‡çš„é‡å¤æ•°æ®ï¼‰
 			lock.clear(memory_order_release);
 
 			return FALSE;
@@ -357,7 +359,7 @@ public:
 			return FALSE;
 		}
 
-		//Í¶µİÒì²½sendÇëÇó
+		//æŠ•é€’å¼‚æ­¥sendè¯·æ±‚
 		Event_handle* pEvent = new Event_handle{ socket,Event_Send ,TRUE,(uint32_t)size };
 		if (pEvent)
 		{
@@ -369,12 +371,12 @@ public:
 				int error = 0;
 				ret = WSASend(
 					socket,
-					&pEvent->buffer,			//Ö¸Ïò»º³åÇøÊı×éµÄÖ¸Õë£¨Ò»¸ö WSABUF Êı×é£¬ÖÁÉÙÓĞÒ»Ïî£©
-					1,							//ÉÏÃæÊı×éµÄ³¤¶È£¬Í¨³£Îª 1
-					NULL,						//Êµ¼Ê·¢ËÍµÄ×Ö½ÚÊı£¨½öÔÚÍ¬²½²Ù×÷³É¹¦Ê±ÓĞĞ§£¬Òì²½²Ù×÷Ê±Í¨³£Îª NULL£©
-					0,							//·¢ËÍ±êÖ¾£¨Ò»°ãÎª 0£©
+					&pEvent->buffer,			//æŒ‡å‘ç¼“å†²åŒºæ•°ç»„çš„æŒ‡é’ˆï¼ˆä¸€ä¸ª WSABUF æ•°ç»„ï¼Œè‡³å°‘æœ‰ä¸€é¡¹ï¼‰
+					1,							//ä¸Šé¢æ•°ç»„çš„é•¿åº¦ï¼Œé€šå¸¸ä¸º 1
+					NULL,						//å®é™…å‘é€çš„å­—èŠ‚æ•°ï¼ˆä»…åœ¨åŒæ­¥æ“ä½œæˆåŠŸæ—¶æœ‰æ•ˆï¼Œå¼‚æ­¥æ“ä½œæ—¶é€šå¸¸ä¸º NULLï¼‰
+					0,							//å‘é€æ ‡å¿—ï¼ˆä¸€èˆ¬ä¸º 0ï¼‰
 					(LPWSAOVERLAPPED)pEvent,
-					NULL						//·¢ËÍÍê³ÉºóµÄ»Øµ÷º¯Êı£¨ÅäºÏÊÂ¼şÍ¨ÖªÄ£ĞÍ£©£¬IOCP ²»ÓÃÕâ¸ö£¬ÉèÎª NULL
+					NULL						//å‘é€å®Œæˆåçš„å›è°ƒå‡½æ•°ï¼ˆé…åˆäº‹ä»¶é€šçŸ¥æ¨¡å‹ï¼‰ï¼ŒIOCP ä¸ç”¨è¿™ä¸ªï¼Œè®¾ä¸º NULL
 				);
 
 				error = WSAGetLastError();
@@ -401,12 +403,12 @@ public:
 	}
 
 private:
-	atomic_flag lock{};// ×î¼òµ¥µÄÔ­×ÓÀàĞÍ£¬½öÖ§³Ö test_and_set ºÍ clear ²Ù×÷
-	atomic<size_t> receive_event_sequence{};//½ÓÊÕÊÂ¼şµÄĞòºÅ;×Ü¹²¿ÉÒÔÓÃ2^64´óĞ¡µÄÊÂ¼şÊıÁ¿£¬¼ÙÉèÃ¿ÃëÏûºÄ1ÒÚ¸öÊÂ¼ş£¬Ò²¿ÉÒÔÊ¹ÓÃ5849Äê£¬¿ÉÒÔÈÏÎª²»»áÏûºÄÍê
-	size_t next_expected_sequence{};//ÏÂÒ»¸öÆÚÍû½ÓÊÕµÄÊÂ¼şµÄĞòºÅ
-	string ordered_data;//ÓĞĞòÊı¾İ»º³åÇø
-	unordered_map<size_t, string> unordered_data;//ÂÒĞòÊı¾İ»º³åÇø
-	chrono::system_clock::time_point last_active_time{};//×îºó»î¶¯Ê±¼ä
+	atomic_flag lock{};// æœ€ç®€å•çš„åŸå­ç±»å‹ï¼Œä»…æ”¯æŒ test_and_set å’Œ clear æ“ä½œ
+	atomic<size_t> receive_event_sequence{};//æ¥æ”¶äº‹ä»¶çš„åºå·;æ€»å…±å¯ä»¥ç”¨2^64å¤§å°çš„äº‹ä»¶æ•°é‡ï¼Œå‡è®¾æ¯ç§’æ¶ˆè€—1äº¿ä¸ªäº‹ä»¶ï¼Œä¹Ÿå¯ä»¥ä½¿ç”¨5849å¹´ï¼Œå¯ä»¥è®¤ä¸ºä¸ä¼šæ¶ˆè€—å®Œ
+	size_t next_expected_sequence{};//ä¸‹ä¸€ä¸ªæœŸæœ›æ¥æ”¶çš„äº‹ä»¶çš„åºå·
+	string ordered_data;//æœ‰åºæ•°æ®ç¼“å†²åŒº
+	unordered_map<size_t, string> unordered_data;//ä¹±åºæ•°æ®ç¼“å†²åŒº
+	chrono::system_clock::time_point last_active_time{};//æœ€åæ´»åŠ¨æ—¶é—´
 	size_t completed_message_size_threshold = Completed_Message_Size_Threshold;
 };
 
@@ -414,15 +416,14 @@ class Server_Handle
 {
 public:
 	unordered_map<SOCKET, Client_Handle> client_handles;
-	vector<unique_ptr<shared_mutex>> buckets_shared_mutexes;
-	mutex global_mutex;
+	shared_mutex smutex;
 
 	Server_Handle();
 	Server_Handle(Server_Handle&) = delete;
 	Server_Handle& operator=(Server_Handle&) = delete;
 	Server_Handle(Server_Handle&& other) noexcept
 	{
-		//ÒÆ¶¯¹¹Ôìº¯Êı£¬½«×ÔÉí×ÊÔ´³õÊ¼»¯Îª0ºó½»»»
+		//ç§»åŠ¨æ„é€ å‡½æ•°ï¼Œå°†è‡ªèº«èµ„æºåˆå§‹åŒ–ä¸º0åäº¤æ¢
 		if (this != &other)
 		{
 			socket = INVALID_SOCKET;
@@ -437,7 +438,7 @@ public:
 	}
 	Server_Handle& operator=(Server_Handle&& other) noexcept
 	{
-		//ÒÆ¶¯¸³Öµº¯Êı£¬½«×ÔÉí×ÊÔ´ÊÍ·ÅºóÖÃ0£¬È»ºó½»»»
+		//ç§»åŠ¨èµ‹å€¼å‡½æ•°ï¼Œå°†è‡ªèº«èµ„æºé‡Šæ”¾åç½®0ï¼Œç„¶åäº¤æ¢
 		if (this != &other)
 		{
 			if (socket != INVALID_SOCKET)
@@ -509,8 +510,7 @@ public:
 	}
 	bool Set_Completed_Message_Size_Threshold(SOCKET socket, size_t value)
 	{
-		size_t bucket_index = client_handles.bucket(socket) % buckets_shared_mutexes.size();
-		shared_lock<shared_mutex> lock{ *(buckets_shared_mutexes.at(bucket_index)) };
+		shared_lock<shared_mutex> shared_lock{ smutex };
 
 		auto it = client_handles.find(socket);
 		if (it == client_handles.end())

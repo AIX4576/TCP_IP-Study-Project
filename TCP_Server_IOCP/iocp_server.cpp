@@ -1,8 +1,8 @@
-#include"iocp_server.h"
+ï»¿#include"iocp_server.h"
 
 Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_flag(FALSE)
 {
-	//´´½¨Ò»¸öÖ§³ÖÖØµşIOµÄTCPÌ×½Ó×Ö, WSASocket()º¯ÊıÊÇWindowsÏµÍ³×¨ÓÃµÄ,socket()º¯ÊıÊÇ¿çÆ½Ì¨µÄ
+	//åˆ›å»ºä¸€ä¸ªæ”¯æŒé‡å IOçš„TCPå¥—æ¥å­—, WSASocket()å‡½æ•°æ˜¯Windowsç³»ç»Ÿä¸“ç”¨çš„,socket()å‡½æ•°æ˜¯è·¨å¹³å°çš„
 	socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
 	if (socket == INVALID_SOCKET)
 	{
@@ -30,7 +30,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	}
 	else
 	{
-		cout << "Socket bind port succeed" << endl;
+		cout << "Socket bind port[" << Server_Port << "] succeed" << endl;
 	}
 
 	result = listen(socket, 5);
@@ -47,7 +47,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 		cout << "Socket listen succeed" << endl;
 	}
 
-	//´´½¨Íê³É¶Ë¿Ú
+	//åˆ›å»ºå®Œæˆç«¯å£
 	iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, Worker_Threads_Number);
 	if (iocp == NULL)
 	{
@@ -58,23 +58,14 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 		return;
 	}
 
-	//½«socketºÍÍê³É¶Ë¿Ú°ó¶¨
+	//å°†socketå’Œå®Œæˆç«¯å£ç»‘å®š
 	CreateIoCompletionPort((HANDLE)socket, iocp, (ULONG_PTR)this, 0);
 
-	//³õÊ¼»¯client_handlesµÄÍ°ÊıÁ¿Îª Max_Clients_Number * 1.2£¬±£Ö¤ÓÀÔ¶²»»á´¥·¢rehash²Ù×÷
+	//åˆå§‹åŒ–client_handlesçš„æ¡¶æ•°é‡ä¸º Max_Clients_Number * 1.2ï¼Œä¿è¯æ°¸è¿œä¸ä¼šè§¦å‘rehashæ“ä½œ
 	client_handles.reserve((size_t)(Max_Clients_Number * 1.2));
 	cout << "client_handles buckets count is " << client_handles.bucket_count() << endl;
 
-	//³õÊ¼»¯buckets_shared_mutexesµÄÈİÁ¿Îª client_handles.bucket_count() £¬¹¹Ôì¶à¸öshared_mutex
-	buckets_shared_mutexes.reserve(client_handles.bucket_count());
-	for (int i = 0; i < buckets_shared_mutexes.capacity(); i++)
-	{
-		buckets_shared_mutexes.emplace_back(make_unique<shared_mutex>());
-	}
-	cout << "buckets_shared_mutexes size is " << buckets_shared_mutexes.size() << endl;
-
-	
-	//Í¶µİÒì²½acceptÇëÇó£¬Í¶µİ¶à¸ö
+	//æŠ•é€’å¼‚æ­¥acceptè¯·æ±‚ï¼ŒæŠ•é€’å¤šä¸ª
 	for (uint32_t i = 0; i < Worker_Threads_Number; i++)
 	{
 		Client_Handle temp_client;
@@ -99,10 +90,10 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 			socket,
 			client_handle.socket,
 			client_handle.output_buffer,
-			Receive_Data_Length,// ²»Á¢¼´ÊÕÊı¾İ
+			Receive_Data_Length,// ä¸ç«‹å³æ”¶æ•°æ®
 			Local_Address_Length,
 			Remote_Address_Length,
-			NULL,// ²»ĞèÒªÁ¢¼´·µ»Ø×Ö½ÚÊı
+			NULL,// ä¸éœ€è¦ç«‹å³è¿”å›å­—èŠ‚æ•°
 			(LPOVERLAPPED)pEvent);
 
 		error = WSAGetLastError();
@@ -146,14 +137,17 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 		if (result)
 		{
-			// ³É¹¦£¡ÎÒÃÇ¿ÉÒÔ¼ÌĞø´¦ÀíÕâ¸öÍê³ÉµÄI/OÈÎÎñ
+			// æˆåŠŸï¼æˆ‘ä»¬å¯ä»¥ç»§ç»­å¤„ç†è¿™ä¸ªå®Œæˆçš„I/Oä»»åŠ¡
+
+			Event_handle* pEvent = (Event_handle*)pOverlapped;
 
 			if (completion_key != (ULONG_PTR)&server_handle)
 			{
+				delete pEvent;
+
 				continue;
 			}
 
-			Event_handle* pEvent = (Event_handle*)pOverlapped;
 			switch (pEvent->event)
 			{
 			case Event_Accept_Connect:
@@ -171,7 +165,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 				Client_Handle& client_handle = it->second;
 
-				//½«ĞÂÁ¬½ÓµÄ client socket Óë iocp °ó¶¨£¬È»ºóÍ¶µİÒì²½recvÇëÇó£¬Í¶µİ¶à¸ö
+				//å°†æ–°è¿æ¥çš„ client socket ä¸ iocp ç»‘å®šï¼Œç„¶åæŠ•é€’å¼‚æ­¥recvè¯·æ±‚ï¼ŒæŠ•é€’å¤šä¸ª
 				HANDLE iocp = CreateIoCompletionPort((HANDLE)client_handle.socket, server_handle.Get_IOCP(), (ULONG_PTR)&server_handle, 0);
 				if (iocp)
 				{
@@ -195,12 +189,12 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						int error = 0;
 						ret = WSARecv(
 							client_handle.socket,
-							&pEvent1->buffer,					//Ö¸Ïò»º³åÇøÊı×éµÄÖ¸Õë£¨Ò»¸ö WSABUF Êı×é£¬ÖÁÉÙÓĞÒ»Ïî£©
-							1,									//ÉÏÃæÊı×éµÄ³¤¶È£¬Í¨³£Îª 1
-							NULL,								//Êµ¼Ê½ÓÊÕµ½µÄ×Ö½ÚÊı£¨½öÔÚÍ¬²½²Ù×÷³É¹¦Ê±ÓĞĞ§£¬Òì²½²Ù×÷Ê±Í¨³£Îª NULL£©
-							&pEvent1->flag,						//±êÖ¾Î»£¨Èç MSG_PARTIAL£©£¬Í¨³£ÉèÎª 0
+							&pEvent1->buffer,					//æŒ‡å‘ç¼“å†²åŒºæ•°ç»„çš„æŒ‡é’ˆï¼ˆä¸€ä¸ª WSABUF æ•°ç»„ï¼Œè‡³å°‘æœ‰ä¸€é¡¹ï¼‰
+							1,									//ä¸Šé¢æ•°ç»„çš„é•¿åº¦ï¼Œé€šå¸¸ä¸º 1
+							NULL,								//å®é™…æ¥æ”¶åˆ°çš„å­—èŠ‚æ•°ï¼ˆä»…åœ¨åŒæ­¥æ“ä½œæˆåŠŸæ—¶æœ‰æ•ˆï¼Œå¼‚æ­¥æ“ä½œæ—¶é€šå¸¸ä¸º NULLï¼‰
+							&pEvent1->flag,						//æ ‡å¿—ä½ï¼ˆå¦‚ MSG_PARTIALï¼‰ï¼Œé€šå¸¸è®¾ä¸º 0
 							(LPWSAOVERLAPPED)pEvent1,
-							NULL								//½ÓÊÕÍê³ÉºóµÄ»Øµ÷º¯Êı£¨ÅäºÏÊÂ¼şÍ¨ÖªÄ£ĞÍ£©£¬IOCP ²»ÓÃÕâ¸ö£¬ÉèÎª NULL
+							NULL								//æ¥æ”¶å®Œæˆåçš„å›è°ƒå‡½æ•°ï¼ˆé…åˆäº‹ä»¶é€šçŸ¥æ¨¡å‹ï¼‰ï¼ŒIOCP ä¸ç”¨è¿™ä¸ªï¼Œè®¾ä¸º NULL
 						);
 
 						error = WSAGetLastError();
@@ -223,8 +217,10 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					}
 					else
 					{
-						//ÍùÏÂÉæ¼°µ½ shared_mutex TODO
-						shared_lock.unlock();
+						if (shared_lock.owns_lock())
+						{
+							shared_lock.unlock();
+						}
 						unique_lock<shared_mutex> unique_lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
 						it = server_handle.client_handles.find(pEvent->socket);
@@ -236,7 +232,10 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				}
 				else
 				{
-					shared_lock.unlock();
+					if (shared_lock.owns_lock())
+					{
+						shared_lock.unlock();
+					}
 					unique_lock<shared_mutex> unique_lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
 					it = server_handle.client_handles.find(pEvent->socket);
@@ -246,14 +245,14 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					}
 				}
 
-				//Í¶µİĞÂµÄÒì²½acceptÇëÇó
-				if (server_handle.client_handles.size() <= Max_Clients_Number)
+				//æŠ•é€’æ–°çš„å¼‚æ­¥acceptè¯·æ±‚
+				if (server_handle.client_handles.size() < Max_Clients_Number)
 				{
 					Client_Handle temp_client;
 
 					if (temp_client.socket != INVALID_SOCKET)
 					{
-						//²åÈë²Ù×÷ÒªËøÈ«¾ÖËø£¬±ÜÃâÍ¬Ê±²åÈë
+						//æ’å…¥æ“ä½œè¦é”å…¨å±€é”ï¼Œé¿å…åŒæ—¶æ’å…¥
 						lock_guard<mutex> lock(server_handle.global_mutex);
 
 						pEvent->socket = temp_client.socket;
@@ -267,10 +266,10 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 							server_handle.Get_Socket_Server(),
 							client_handle1.socket,
 							client_handle1.output_buffer,
-							Receive_Data_Length,// ²»Á¢¼´ÊÕÊı¾İ
+							Receive_Data_Length,// ä¸ç«‹å³æ”¶æ•°æ®
 							Local_Address_Length,
 							Remote_Address_Length,
-							NULL,// ²»ĞèÒªÁ¢¼´·µ»Ø×Ö½ÚÊı
+							NULL,// ä¸éœ€è¦ç«‹å³è¿”å›å­—èŠ‚æ•°
 							(LPOVERLAPPED)pEvent);
 
 						error = WSAGetLastError();
@@ -294,7 +293,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 			case Event_Disconnect:
 			{
 				size_t bucket_index = server_handle.client_handles.bucket(pEvent->socket) % server_handle.buckets_shared_mutexes.size();
-				unique_lock<shared_mutex> lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
+				shared_lock<shared_mutex> shared_lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
 
 				auto it = server_handle.client_handles.find(pEvent->socket);
 				if (it == server_handle.client_handles.end())
@@ -308,7 +307,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 				client_handle.Disonnect_Deal();
 
-				//¸´ÓÃ¸Ãsocket£¬¼ÌĞøÍ¶µİÒì²½acceptÇëÇó(·şÎñÆ÷Ê¹ÓÃDisconnectEx()Ö÷¶¯¶Ï¿ªsocketÁ¬½Ó²ÅÄÜ¸´ÓÃ)
+				//å¤ç”¨è¯¥socketï¼Œç»§ç»­æŠ•é€’å¼‚æ­¥acceptè¯·æ±‚(æœåŠ¡å™¨ä½¿ç”¨DisconnectEx()ä¸»åŠ¨æ–­å¼€socketè¿æ¥æ‰èƒ½å¤ç”¨)
 				pEvent->event = Event_Accept_Connect;
 
 				int ret = FALSE;
@@ -317,14 +316,20 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					server_handle.Get_Socket_Server(),
 					client_handle.socket,
 					client_handle.output_buffer,
-					Receive_Data_Length,// ²»Á¢¼´ÊÕÊı¾İ
+					Receive_Data_Length,// ä¸ç«‹å³æ”¶æ•°æ®
 					Local_Address_Length,
 					Remote_Address_Length,
-					NULL,// ²»ĞèÒªÁ¢¼´·µ»Ø×Ö½ÚÊı
+					NULL,// ä¸éœ€è¦ç«‹å³è¿”å›å­—èŠ‚æ•°
 					(LPOVERLAPPED)pEvent);
 
 				if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 				{
+					if (shared_lock.owns_lock())
+					{
+						shared_lock.unlock();
+					}
+					unique_lock<shared_mutex> unique_lock{ *(server_handle.buckets_shared_mutexes.at(bucket_index)) };
+
 					server_handle.client_handles.erase(it);
 					delete pEvent;
 				}
@@ -350,10 +355,10 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 				Client_Handle& client_handle = it->second;
 
-				//¿Í»§¶ËÒì³£¹Ø±Õ
+				//å®¢æˆ·ç«¯å¼‚å¸¸å…³é—­
 				if (bytes_transferred == 0)
 				{
-					//°ÑÓĞĞòÊı¾İ»º³åÇøµÄÊı¾İÈ«²¿½»¸øÒµÎñ²ã£¬Í¬Ê±·¢ËÍÒ»¸ö°üº¬¿ÕstringµÄmessage¸øÒµÎñ²ã£¬±íÊ¾Á¬½ÓÒÑ¶Ï¿ª
+					//æŠŠæœ‰åºæ•°æ®ç¼“å†²åŒºçš„æ•°æ®å…¨éƒ¨äº¤ç»™ä¸šåŠ¡å±‚ï¼ŒåŒæ—¶å‘é€ä¸€ä¸ªåŒ…å«ç©ºstringçš„messageç»™ä¸šåŠ¡å±‚ï¼Œè¡¨ç¤ºè¿æ¥å·²æ–­å¼€
 					size_t queue_index = server_handle.Socket_Map_In_Range(client_handle.socket, receive_queues.size());
 					if (client_handle.Get_Ordered_Data_Size())
 					{
@@ -372,20 +377,20 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					break;
 				}
 
-				//¸üĞÂ×îºó»î¶¯Ê±¼ä
+				//æ›´æ–°æœ€åæ´»åŠ¨æ—¶é—´
 				client_handle.Update_Last_Active_Time();
 
-				//½«½ÓÊÕµ½µÄÊı¾İÅÅĞò£¬´æÈëÓĞĞòÊı¾İ»º³åÇøºÍÂÒĞòÊı¾İ»º³åÇø
+				//å°†æ¥æ”¶åˆ°çš„æ•°æ®æ’åºï¼Œå­˜å…¥æœ‰åºæ•°æ®ç¼“å†²åŒºå’Œä¹±åºæ•°æ®ç¼“å†²åŒº
 				client_handle.Sort_Receive_Data(pEvent, bytes_transferred);
 
-				//ÈôÓĞĞòÊı¾İ»º³åÇøµÄÊı¾İ×ã¹»×é³ÉÍêÕûÏûÏ¢£¬ÔòÌá½»¸øÒµÎñ²ã
+				//è‹¥æœ‰åºæ•°æ®ç¼“å†²åŒºçš„æ•°æ®è¶³å¤Ÿç»„æˆå®Œæ•´æ¶ˆæ¯ï¼Œåˆ™æäº¤ç»™ä¸šåŠ¡å±‚
 				if (client_handle.Get_Ordered_Data_Size() >= client_handle.Get_Completed_Message_Size_Threshold())
 				{
 					size_t queue_index = server_handle.Socket_Map_In_Range(client_handle.socket, receive_queues.size());
 					receive_queues.at(queue_index).enqueue(Message{ client_handle.socket,client_handle.Get_Ordered_Data() });
 				}
 
-				//ÈôÂÒĞòÊı¾İ»º³åÇøÖĞ»ıÑ¹µÄ½ÓÊÕÊÂ¼şĞòÁĞºÅÊıÁ¿³¬¹ıãĞÖµ£¬ËµÃ÷¿ÉÄÜ´æÔÚÊı¾İ¶ªÊ§£¬´ËÊ±Ó¦¹Ø±ÕÁ¬½Ó
+				//è‹¥ä¹±åºæ•°æ®ç¼“å†²åŒºä¸­ç§¯å‹çš„æ¥æ”¶äº‹ä»¶åºåˆ—å·æ•°é‡è¶…è¿‡é˜ˆå€¼ï¼Œè¯´æ˜å¯èƒ½å­˜åœ¨æ•°æ®ä¸¢å¤±ï¼Œæ­¤æ—¶åº”å…³é—­è¿æ¥
 				if (client_handle.Get_Unordered_Data_Number() > Per_Client_Unordered_Data_Number_Threshold)
 				{
 					server_handle.client_handles.erase(it);
@@ -394,20 +399,20 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					break;
 				}
 
-				//ÉèÖÃ¸ÃreceiveÊÂ¼şĞÂµÄid
+				//è®¾ç½®è¯¥receiveäº‹ä»¶æ–°çš„id
 				pEvent->Set_id(client_handle.Make_Receive_Event_id());
 
-				//¼ÌĞøÍ¶µİÒì²½recvÇëÇó
+				//ç»§ç»­æŠ•é€’å¼‚æ­¥recvè¯·æ±‚
 				int ret = 0;
 				int error = 0;
 				ret = WSARecv(
 					client_handle.socket,
-					&pEvent->buffer,			//Ö¸Ïò»º³åÇøÊı×éµÄÖ¸Õë£¨Ò»¸ö WSABUF Êı×é£¬ÖÁÉÙÓĞÒ»Ïî£©
-					1,							//ÉÏÃæÊı×éµÄ³¤¶È£¬Í¨³£Îª 1
-					NULL,						//Êµ¼Ê½ÓÊÕµ½µÄ×Ö½ÚÊı£¨½öÔÚÍ¬²½²Ù×÷³É¹¦Ê±ÓĞĞ§£¬Òì²½²Ù×÷Ê±Í¨³£Îª NULL£©
-					&pEvent->flag,				//±êÖ¾Î»£¨Èç MSG_PARTIAL£©£¬Í¨³£ÉèÎª 0
+					&pEvent->buffer,			//æŒ‡å‘ç¼“å†²åŒºæ•°ç»„çš„æŒ‡é’ˆï¼ˆä¸€ä¸ª WSABUF æ•°ç»„ï¼Œè‡³å°‘æœ‰ä¸€é¡¹ï¼‰
+					1,							//ä¸Šé¢æ•°ç»„çš„é•¿åº¦ï¼Œé€šå¸¸ä¸º 1
+					NULL,						//å®é™…æ¥æ”¶åˆ°çš„å­—èŠ‚æ•°ï¼ˆä»…åœ¨åŒæ­¥æ“ä½œæˆåŠŸæ—¶æœ‰æ•ˆï¼Œå¼‚æ­¥æ“ä½œæ—¶é€šå¸¸ä¸º NULLï¼‰
+					&pEvent->flag,				//æ ‡å¿—ä½ï¼ˆå¦‚ MSG_PARTIALï¼‰ï¼Œé€šå¸¸è®¾ä¸º 0
 					(LPWSAOVERLAPPED)pEvent,
-					NULL						//½ÓÊÕÍê³ÉºóµÄ»Øµ÷º¯Êı£¨ÅäºÏÊÂ¼şÍ¨ÖªÄ£ĞÍ£©£¬IOCP ²»ÓÃÕâ¸ö£¬ÉèÎª NULL
+					NULL						//æ¥æ”¶å®Œæˆåçš„å›è°ƒå‡½æ•°ï¼ˆé…åˆäº‹ä»¶é€šçŸ¥æ¨¡å‹ï¼‰ï¼ŒIOCP ä¸ç”¨è¿™ä¸ªï¼Œè®¾ä¸º NULL
 				);
 
 				error = WSAGetLastError();
@@ -442,11 +447,11 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 		{
 			if (pOverlapped == NULL)
 			{
-				// ³¬Ê±ÁË£¬Ã»ÓĞÈÎºÎÈÎÎñÍê³É
+				// è¶…æ—¶äº†ï¼Œæ²¡æœ‰ä»»ä½•ä»»åŠ¡å®Œæˆ
 			}
 			else
 			{
-				// ÓĞÈÎÎñÍê³Éµ«³ö´íÁË£¬Òª¸ù¾İ´íÎóÂëÀ´´¦Àí£¬±ÈÈçÁ¬½Ó±»¶Ï¿ªµÈ
+				// æœ‰ä»»åŠ¡å®Œæˆä½†å‡ºé”™äº†ï¼Œè¦æ ¹æ®é”™è¯¯ç æ¥å¤„ç†ï¼Œæ¯”å¦‚è¿æ¥è¢«æ–­å¼€ç­‰
 				Event_handle* pEvent = (Event_handle*)pOverlapped;
 
 				if (completion_key == (ULONG_PTR)&server_handle)
@@ -466,7 +471,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 							Client_Handle& client_handle = it1->second;
 							if (client_handle.socket_status == Socket_Connected)
 							{
-								//°ÑÓĞĞòÊı¾İ»º³åÇøµÄÊı¾İÈ«²¿½»¸øÒµÎñ²ã£¬Í¬Ê±·¢ËÍÒ»¸ö°üº¬¿ÕstringµÄmessage¸øÒµÎñ²ã£¬±íÊ¾Á¬½ÓÒÑ¶Ï¿ª
+								//æŠŠæœ‰åºæ•°æ®ç¼“å†²åŒºçš„æ•°æ®å…¨éƒ¨äº¤ç»™ä¸šåŠ¡å±‚ï¼ŒåŒæ—¶å‘é€ä¸€ä¸ªåŒ…å«ç©ºstringçš„messageç»™ä¸šåŠ¡å±‚ï¼Œè¡¨ç¤ºè¿æ¥å·²æ–­å¼€
 								size_t queue_index = server_handle.Socket_Map_In_Range(client_handle.socket, receive_queues.size());
 								if (client_handle.Get_Ordered_Data_Size())
 								{
@@ -475,7 +480,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 								receive_queues.at(queue_index).enqueue(Message{ client_handle.socket ,string() });
 							}
 
-							//µ±socket¶Ï¿ªÁ¬½ÓÊ±£¬ËùÓĞÎ´Íê³ÉµÄÒì²½²Ù×÷¶¼»á±»ÏµÍ³Ç¿ÖÆÍê³É£¬²¢Í¨¹ıÍê³É¶Ë¿Ú£¨IOCP£©»úÖÆÍ¨ÖªÓ¦ÓÃ³ÌĞò
+							//å½“socketæ–­å¼€è¿æ¥æ—¶ï¼Œæ‰€æœ‰æœªå®Œæˆçš„å¼‚æ­¥æ“ä½œéƒ½ä¼šè¢«ç³»ç»Ÿå¼ºåˆ¶å®Œæˆï¼Œå¹¶é€šè¿‡å®Œæˆç«¯å£ï¼ˆIOCPï¼‰æœºåˆ¶é€šçŸ¥åº”ç”¨ç¨‹åº
 							size_t result = server_handle.client_handles.erase(pEvent->socket);
 							if (result)
 							{
@@ -538,7 +543,7 @@ void clean_thread(bool& run_flag, Server_Handle& server_handle)
 
 	while (run_flag)
 	{
-		//Ã¿ Client_Active_Timeout_Scan_Interval Ãë±éÀúÒ»´ÎËùÓĞ client_handles £¬°Ñ»î¶¯³¬Ê±µÄsocket¶Ï¿ªÁ¬½Ó£¬°Ñsocket statusÎªinvalidµÄclient_handleÇå³ı
+		//æ¯ Client_Active_Timeout_Scan_Interval ç§’éå†ä¸€æ¬¡æ‰€æœ‰ client_handles ï¼ŒæŠŠæ´»åŠ¨è¶…æ—¶çš„socketæ–­å¼€è¿æ¥ï¼ŒæŠŠsocket statusä¸ºinvalidçš„client_handleæ¸…é™¤
 		auto current_time = chrono::system_clock::now();
 		if (chrono::duration_cast<chrono::seconds>(current_time - last_scan_time).count() > Client_Active_Timeout_Scan_Interval)
 		{

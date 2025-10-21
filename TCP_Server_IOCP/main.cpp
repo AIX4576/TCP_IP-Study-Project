@@ -1,4 +1,4 @@
-#include"iocp_server.h"
+ï»¿#include"iocp_server.h"
 #include"application_layer.h"
 
 int main()
@@ -22,7 +22,7 @@ int main()
 		return -1;
 	}
 
-	//´´½¨ÎŞËø²¢·¢¶ÓÁĞ
+	//åˆ›å»ºæ— é”å¹¶å‘é˜Ÿåˆ—
 	vector<moodycamel::ConcurrentQueue<Message>> receive_queues;
 	vector<moodycamel::ConcurrentQueue<Message>> send_queues;
 	receive_queues.reserve(Application_Threads_Number);
@@ -34,26 +34,26 @@ int main()
 	}
 	cout << "application threads number is " << Application_Threads_Number << endl;
 
-	//´´½¨Ïß³Ì³Ø
+	//åˆ›å»ºçº¿ç¨‹æ± 
 	bool run_flag = TRUE;
 	list<thread> thread_pool;
 
-	//iocp¹¤×÷Ïß³Ì
+	//iocpå·¥ä½œçº¿ç¨‹
 	for (uint32_t i = 0; i < Worker_Threads_Number; i++)
 	{
 		thread_pool.emplace_back(work_thread, ref(run_flag), ref(server_handle), ref(receive_queues));
 	}
 
-	//iocp·¢ËÍÏß³Ì
+	//iocpå‘é€çº¿ç¨‹
 	for (uint32_t i = 0; i < Send_Threads_Number; i++)
 	{
 		thread_pool.emplace_back(send_thread, ref(run_flag), ref(server_handle), ref(send_queues));
 	}
 
-	//iocpÇåÀíÏß³Ì
+	//iocpæ¸…ç†çº¿ç¨‹
 	thread_pool.emplace_back(clean_thread, ref(run_flag), ref(server_handle));
 
-	//Ó¦ÓÃÏß³Ì
+	//åº”ç”¨çº¿ç¨‹
 	for (uint32_t i = 0; i < Application_Threads_Number; i++)
 	{
 		thread_pool.emplace_back(application_thread, ref(run_flag), ref(server_handle), ref(receive_queues.at(i)), ref(send_queues.at(i)));
