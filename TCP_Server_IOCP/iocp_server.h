@@ -10,8 +10,11 @@
 #include<atomic>
 using namespace std;
 
-#include"boost/pool/object_pool.hpp"
+#include"folly/container/F14Map.h"
+#include"boost/circular_buffer.hpp"
 #include"concurrentqueue.h"
+
+#include"LockFreeObjectPool.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include<WS2tcpip.h> //基础套接字API头文件
@@ -21,9 +24,10 @@ using namespace std;
 
 #define Server_Port 8080
 
-#define Application_Threads_Number (std::thread::hardware_concurrency())
-#define Worker_Threads_Number (std::thread::hardware_concurrency() / 4 * 3)
-#define Send_Threads_Number (std::thread::hardware_concurrency() / 4)
+#define Threads_Number (std::thread::hardware_concurrency())
+#define Application_Threads_Number Threads_Number
+#define Worker_Threads_Number (Threads_Number / 2)
+#define Send_Threads_Number (Threads_Number / 2)
 #define Max_Clients_Number 1024
 
 #define Receive_Data_Length 0
@@ -31,13 +35,14 @@ using namespace std;
 #define Remote_Address_Length (sizeof(SOCKADDR_IN) + 16)
 
 #define Per_Client_Receive_Event_Number 3
-#define Per_Client_Ordered_Data_Default_Capacity (1024 * 16)
 #define Per_Client_Unordered_Data_Number_Threshold 8
-#define Completed_Message_Size_Threshold 32
 #define Client_Active_Timeout_Second 180
 #define Client_Active_Timeout_Scan_Interval 60
 #define Event_Buffer_Size 1460
-#define Each_Send_Queue_Limit_Send_Count 5
+
+class Server_Handle;
+class Client_Handle;
+struct Event_handle;
 
 enum Socket_Status
 {
@@ -63,14 +68,14 @@ public:
 	Deliver_Event event;
 	DWORD flag{};//WSARecv()要用到，默认是0
 	WSABUF buffer{};//WSARecv()和WSASend()要用到
-	char data[Event_Buffer_Size]{};//数据缓冲区
+	char data[Event_Buffer_Size];//数据缓冲区
 
-	Event_handle(size_t event_id = 0) : socket(INVALID_SOCKET), event(Event_None), id(event_id)
+	Event_handle(size_t id = 0, size_t pool_index = 0) : socket(INVALID_SOCKET), event(Event_None), id(id)
 	{
 		buffer.buf = data;
 		buffer.len = Event_Buffer_Size;
 	}
-	Event_handle(SOCKET socket, Deliver_Event event, uint32_t buffer_size = Event_Buffer_Size, size_t event_id = 0) : socket(socket), event(event), id(event_id)
+	Event_handle(SOCKET socket, Deliver_Event event, uint32_t buffer_size = Event_Buffer_Size, size_t id = 0) : socket(socket), event(event), id(id)
 	{
 		buffer.buf = data;
 		buffer.len = min(buffer_size, Event_Buffer_Size);
@@ -117,32 +122,42 @@ public:
 	{
 		return id;
 	}
-	void Set_id(size_t event_id)
+	void Set_id(size_t id)
 	{
-		id = event_id;
+		this->id = id;
+	}
+	size_t Get_pool_index() const
+	{
+		return pool_index;
+	}
+	void Set_pool_index(size_t pool_index)
+	{
+		this->pool_index = pool_index;
 	}
 
 private:
 	size_t id{};
+	size_t pool_index{};
 };
 
 class Client_Handle
 {
 public:
+	Server_Handle* pServer_Handle;
 	SOCKET socket;
 	Socket_Status socket_status;
 	string ip;
 	uint16_t port{};
 	uint8_t output_buffer[Receive_Data_Length + Local_Address_Length + Remote_Address_Length]{};// 地址 + 数据
 
-	Client_Handle() :socket(INVALID_SOCKET), socket_status(Socket_Invalid)
+	Client_Handle(Server_Handle* pServer_Handle) :socket(INVALID_SOCKET), socket_status(Socket_Invalid), pServer_Handle(pServer_Handle)
 	{
 		socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
 		if (socket != INVALID_SOCKET)
 		{
 			socket_status = Socket_Disconnected;
-			ordered_data.reserve(Per_Client_Ordered_Data_Default_Capacity);
-			unordered_data.reserve(Per_Client_Unordered_Data_Number_Threshold + 2);
+			ordered_data.set_capacity(Per_Client_Unordered_Data_Number_Threshold + 3);
+			unordered_data.reserve(Per_Client_Unordered_Data_Number_Threshold + 3);
 		}
 	}
 	Client_Handle(Client_Handle&) = delete;
@@ -155,6 +170,7 @@ public:
 			socket = INVALID_SOCKET;
 			socket_status = Socket_Invalid;
 
+			swap(pServer_Handle, other.pServer_Handle);
 			swap(socket, other.socket);
 			swap(socket_status, other.socket_status);
 			swap(ip, other.ip);
@@ -164,7 +180,6 @@ public:
 			swap(ordered_data, other.ordered_data);
 			swap(unordered_data, other.unordered_data);
 			swap(last_active_time, other.last_active_time);
-			swap(completed_message_size_threshold, other.completed_message_size_threshold);
 		}
 	}
 	Client_Handle& operator=(Client_Handle&& other) noexcept
@@ -184,6 +199,7 @@ public:
 			ordered_data.clear();
 			unordered_data.clear();
 
+			swap(pServer_Handle, other.pServer_Handle);
 			swap(socket, other.socket);
 			swap(socket_status, other.socket_status);
 			swap(ip, other.ip);
@@ -193,21 +209,11 @@ public:
 			swap(ordered_data, other.ordered_data);
 			swap(unordered_data, other.unordered_data);
 			swap(last_active_time, other.last_active_time);
-			swap(completed_message_size_threshold, other.completed_message_size_threshold);
 		}
 
 		return *this;
 	}
-	~Client_Handle()
-	{
-		if (socket != INVALID_SOCKET)
-		{
-			CancelIoEx((HANDLE)socket, NULL);
-			closesocket(socket);
-			socket = INVALID_SOCKET;
-			socket_status = Socket_Invalid;
-		}
-	}
+	~Client_Handle();
 	void Connect_Deal()
 	{
 		socket_status = Socket_Connected;
@@ -231,7 +237,6 @@ public:
 		lock.clear();
 		receive_event_sequence = 0;
 		next_expected_sequence = 0;
-		ordered_data.clear();
 		unordered_data.clear();
 	}
 	void Update_Last_Active_Time()
@@ -256,214 +261,130 @@ public:
 	{
 		return receive_event_sequence.fetch_add(1, memory_order_release);
 	}
-	void Set_Completed_Message_Size_Threshold(size_t value)
+	/*
+	* 处理接收到的数据，如果该数据是过期重复的数据，则为无效数据，没有被ordered_data或unordered_data存储，此时需要外部销毁pEvent
+	* 如果是有效数据，则被ordered_data或unordered_data存储，此时外部在数据被取出前不能使用或销毁pEvent
+	*/
+	bool Receive_Data_Process(Event_handle* pEvent, DWORD bytes_transferred)
 	{
-		completed_message_size_threshold = value;
-	}
-	size_t Get_Completed_Message_Size_Threshold()
-	{
-		return completed_message_size_threshold;
-	}
-	size_t Get_Unordered_Data_Number()
-	{
-		return unordered_data.size();
-	}
-	size_t Get_Ordered_Data_Size()
-	{
-		return ordered_data.size();
-	}
-	string Get_Ordered_Data()
-	{
-		// 循环尝试获取锁，test_and_set会原子地将lock设为true，并返回操作前的值
-		while (lock.test_and_set(memory_order_acquire))
-		{
-			this_thread::yield();
+		bool valid_data = false;
 
-			if (Get_Ordered_Data_Size() == 0)
-			{
-				return {};
-			}
-		}
+		pEvent->buffer.len = bytes_transferred;
+		size_t event_sequence = pEvent->Get_id();
 
-		string data{ ordered_data };
-		ordered_data.clear();
-
-		lock.clear(memory_order_release);
-
-		return data;
-	}
-	bool Sort_Receive_Data(Event_handle* event, uint32_t data_size)
-	{
-		if (event == NULL)
-		{
-			return FALSE;
-		}
-		if ((event->event != Event_Receive) || (event->buffer.buf == NULL))
-		{
-			return FALSE;
-		}
-
-		// 循环尝试获取锁，test_and_set会原子地将lock设为true，并返回操作前的值
 		while (lock.test_and_set(memory_order_acquire))
 		{
 			this_thread::yield();
 		}
 
-		size_t event_id = event->Get_id();
-		if (event_id == next_expected_sequence)
+		if (event_sequence == next_expected_sequence)
 		{
-			// 1. 若当前receive事件的id等于期望的序列号，直接拼接
-			ordered_data.append(event->buffer.buf, min(event->buffer.len, data_size));
-			next_expected_sequence++;// 期望序列号+1
+			//放进有序数据缓冲区，同时查找无序数据缓冲区中是否有数据和其连续
+			ordered_data.push_back(pEvent);
+			next_expected_sequence++;
 
-			// 2. 检查乱序缓冲区，处理后续连续的序列号
 			auto it = unordered_data.find(next_expected_sequence);
 			while (it != unordered_data.end())
 			{
-				// 拼接下一个连续数据
-				ordered_data += it->second;
-				next_expected_sequence++;// 期望序列号+1
-
-				//移除该数据
+				ordered_data.push_back(it->second);
 				unordered_data.erase(it);
-
-				// 继续检查下一个序列号
+				next_expected_sequence++;
 				it = unordered_data.find(next_expected_sequence);
 			}
+
+			valid_data = true;
 		}
-		else if (event_id > next_expected_sequence)
+		else if (event_sequence > next_expected_sequence)
 		{
-			// 3. 若id不连续，存入乱序缓冲区，仅缓存未来的序列号（避免重复/过期数据）
-			unordered_data.emplace(event_id, string(event->buffer.buf, min(event->buffer.len, data_size)));
+			//放进无序数据缓冲区
+			unordered_data.emplace(event_sequence, pEvent);
+			valid_data = true;
 		}
 		else
 		{
-			// 4. id小于期望的序列号（已处理过的重复数据）
-			lock.clear(memory_order_release);
-
-			return FALSE;
+			//重复数据，丢弃
+			valid_data = false;
 		}
 
 		lock.clear(memory_order_release);
 
-		return TRUE;
+		return valid_data;
 	}
-	bool Send_Data_Ex(const char* data, size_t size)
+	// 获取有序数据，返回有序数据的数量，pEvent_array需确保存在
+	size_t Get_Ordered_Data(Event_handle** pEvent_array, size_t max_count)
 	{
-		if (socket_status != Socket_Connected)
+		size_t count = 0;
+
+		while (lock.test_and_set(memory_order_acquire))
 		{
-			return FALSE;
-		}
-		if (size == 0)
-		{
-			return FALSE;
+			this_thread::yield();
 		}
 
-		//投递异步send请求
-		Event_handle* pEvent = new Event_handle{ socket,Event_Send ,TRUE,(uint32_t)size };
-		if (pEvent)
+		while (ordered_data.empty() == false)
 		{
-			if (pEvent->buffer.buf)
+			if (count >= max_count)
 			{
-				memcpy(pEvent->buffer.buf, data, size);
-
-				int ret = 0;
-				int error = 0;
-				ret = WSASend(
-					socket,
-					&pEvent->buffer,			//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
-					1,							//上面数组的长度，通常为 1
-					NULL,						//实际发送的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
-					0,							//发送标志（一般为 0）
-					(LPWSAOVERLAPPED)pEvent,
-					NULL						//发送完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
-				);
-
-				error = WSAGetLastError();
-				if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
-				{
-					delete pEvent;
-
-					return FALSE;
-				}
+				break;
 			}
-			else
-			{
-				delete pEvent;
 
-				return FALSE;
-			}
-		}
-		else
-		{
-			return FALSE;
+			pEvent_array[count++] = ordered_data.front();
+			ordered_data.pop_front();
 		}
 
-		return TRUE;
+		lock.clear(memory_order_release);
+
+		return count;
 	}
+	size_t Get_Unordered_Data_Number() const
+	{
+		return unordered_data.size();
+	}
+	// 获取无序数据，返回无序数据的数量，pEvent_array需确保存在
+	size_t Get_Unordered_Data(Event_handle** pEvent_array, size_t max_count)
+	{
+		size_t count = 0;
 
+		while (lock.test_and_set(memory_order_acquire))
+		{
+			this_thread::yield();
+		}
+
+		for (const auto& pair : unordered_data)
+		{
+			if (count >= max_count)
+			{
+				break;
+			}
+
+			pEvent_array[count++] = pair.second;
+		}
+		unordered_data.clear();
+
+		lock.clear(memory_order_release);
+
+		return count;
+	}
+	
 private:
 	atomic_flag lock{};// 最简单的原子类型，仅支持 test_and_set 和 clear 操作
 	atomic<size_t> receive_event_sequence{};//接收事件的序号;总共可以用2^64大小的事件数量，假设每秒消耗1亿个事件，也可以使用5849年，可以认为不会消耗完
 	size_t next_expected_sequence{};//下一个期望接收的事件的序号
-	string ordered_data;//有序数据缓冲区
-	unordered_map<size_t, string> unordered_data;//乱序数据缓冲区
+	boost::circular_buffer<Event_handle*> ordered_data;//有序数据缓冲区
+	folly::F14FastMap<size_t, Event_handle*> unordered_data;//无序数据缓冲区
 	chrono::system_clock::time_point last_active_time{};//最后活动时间
-	size_t completed_message_size_threshold = Completed_Message_Size_Threshold;
 };
 
 class Server_Handle
 {
 public:
-	unordered_map<SOCKET, Client_Handle> client_handles;
+	folly::F14FastMap<SOCKET, Client_Handle> client_handles;
 	shared_mutex smutex;
 
 	Server_Handle();
 	Server_Handle(Server_Handle&) = delete;
+	Server_Handle(Server_Handle&& other) = delete;
 	Server_Handle& operator=(Server_Handle&) = delete;
-	Server_Handle(Server_Handle&& other) noexcept
-	{
-		//移动构造函数，将自身资源初始化为0后交换
-		if (this != &other)
-		{
-			socket = INVALID_SOCKET;
-			iocp = NULL;
-			initialize_flag = FALSE;
-
-			swap(initialize_flag, other.initialize_flag);
-			swap(socket, other.socket);
-			swap(iocp, other.iocp);
-			swap(client_handles, other.client_handles);
-		}
-	}
-	Server_Handle& operator=(Server_Handle&& other) noexcept
-	{
-		//移动赋值函数，将自身资源释放后置0，然后交换
-		if (this != &other)
-		{
-			if (socket != INVALID_SOCKET)
-			{
-				CancelIoEx((HANDLE)socket, NULL);
-				closesocket(socket);
-				socket = INVALID_SOCKET;
-			}
-			if (iocp != NULL)
-			{
-				CloseHandle(iocp);
-				iocp = NULL;
-			}
-
-			client_handles.clear();
-			initialize_flag = FALSE;
-
-			swap(initialize_flag, other.initialize_flag);
-			swap(socket, other.socket);
-			swap(iocp, other.iocp);
-			swap(client_handles, other.client_handles);
-		}
-
-		return *this;
-	}
+	Server_Handle& operator=(Server_Handle&& other) = delete;
 	~Server_Handle()
 	{
 		if (socket != INVALID_SOCKET)
@@ -508,20 +429,30 @@ public:
 
 		return hasher_socket(socket) % range;
 	}
-	bool Set_Completed_Message_Size_Threshold(SOCKET socket, size_t value)
+	template<typename... Args>
+	Event_handle* Construct_Event_handle(Args&&... args)
 	{
-		shared_lock<shared_mutex> shared_lock{ smutex };
+		size_t pool_index = hasher_thread_id(this_thread::get_id()) % p_event_handle_pools.size();
+		LockFreeObjectPool<Event_handle>& event_handle_pool = *(p_event_handle_pools.at(pool_index));
 
-		auto it = client_handles.find(socket);
-		if (it == client_handles.end())
+		Event_handle* p = event_handle_pool.Construct(forward<Args>(args)...);
+		if (p)
 		{
-			return false;
+			p->Set_pool_index(pool_index);
 		}
 
-		Client_Handle& client_handle = it->second;
-		client_handle.Set_Completed_Message_Size_Threshold(value);
+		return p;
+	}
+	void Destory_Event_handle(Event_handle* p)
+	{
+		if (p == NULL)
+		{
+			return;
+		}
 
-		return true;
+		LockFreeObjectPool<Event_handle>& event_handle_pool = *(p_event_handle_pools.at(p->Get_pool_index()));
+
+		event_handle_pool.Destory(p);
 	}
 
 private:
@@ -529,42 +460,10 @@ private:
 	HANDLE iocp;
 	bool initialize_flag;
 	hash<SOCKET> hasher_socket;
+	hash<thread::id> hasher_thread_id;
+	vector<unique_ptr<LockFreeObjectPool<Event_handle>>> p_event_handle_pools;
 };
 
-struct Message
-{
-	SOCKET socket;
-	string data;
-
-	Message() :socket(INVALID_SOCKET) {}
-	Message(SOCKET socket, string& data) :socket(socket), data(data) {}
-	Message(SOCKET socket, string&& data) :socket(socket), data(data) {}
-	Message(Message&) = delete;
-	Message& operator=(Message&) = delete;
-	Message(Message&& other) noexcept
-	{
-		if (this != &other)
-		{
-			socket = INVALID_SOCKET;
-
-			swap(socket, other.socket);
-			swap(data, other.data);
-		}
-	}
-	Message& operator=(Message&& other) noexcept
-	{
-		if (this != &other)
-		{
-			socket = INVALID_SOCKET;
-
-			swap(socket, other.socket);
-			swap(data, other.data);
-		}
-
-		return *this;
-	}
-};
-
-void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Message>>& receive_queues);
-void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Message>>& send_queues);
+void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& receive_queues);
+void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& send_queues);
 void clean_thread(bool& run_flag, Server_Handle& server_handle);

@@ -23,8 +23,8 @@ int main()
 	}
 
 	//创建无锁并发队列
-	vector<moodycamel::ConcurrentQueue<Message>> receive_queues;
-	vector<moodycamel::ConcurrentQueue<Message>> send_queues;
+	vector<moodycamel::ConcurrentQueue<Event_handle*>> receive_queues;
+	vector<moodycamel::ConcurrentQueue<Event_handle*>> send_queues;
 	receive_queues.reserve(Application_Threads_Number);
 	send_queues.reserve(Application_Threads_Number);
 	for (uint32_t i = 0; i < Application_Threads_Number; i++)
@@ -32,6 +32,8 @@ int main()
 		receive_queues.emplace_back();
 		send_queues.emplace_back();
 	}
+	cout << "work threads number is " << Worker_Threads_Number << endl;
+	cout << "send threads number is " << Send_Threads_Number << endl;
 	cout << "application threads number is " << Application_Threads_Number << endl;
 
 	//创建线程池
@@ -77,7 +79,7 @@ int main()
 	}
 
 	server_handle.Close_Socket();
-	this_thread::sleep_for(chrono::seconds(1));
+	this_thread::sleep_for(chrono::seconds(3));
 	run_flag = FALSE;
 
 	for (thread& item : thread_pool)

@@ -21,6 +21,9 @@
     <ClInclude Include="application_layer.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="LockFreeObjectPool.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">

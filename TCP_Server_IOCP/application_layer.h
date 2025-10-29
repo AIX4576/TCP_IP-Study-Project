@@ -6,5 +6,5 @@ using namespace std;
 
 void application_thread(bool& run_flag,
 	Server_Handle& server_handle,
-	moodycamel::ConcurrentQueue<Message>& receive_queue,
-	moodycamel::ConcurrentQueue<Message>& send_queue);
+	moodycamel::ConcurrentQueue<Event_handle*>& receive_queue,
+	moodycamel::ConcurrentQueue<Event_handle*>& send_queue);

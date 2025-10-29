@@ -138,6 +138,7 @@
   <ItemGroup>
     <ClInclude Include="application_layer.h" />
     <ClInclude Include="iocp_server.h" />
+    <ClInclude Include="LockFreeObjectPool.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="application_layer.cpp" />

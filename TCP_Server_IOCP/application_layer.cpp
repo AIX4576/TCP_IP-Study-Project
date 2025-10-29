@@ -2,21 +2,26 @@
 
 void application_thread(bool& run_flag,
 	Server_Handle& server_handle,
-	moodycamel::ConcurrentQueue<Message>& receive_queue,
-	moodycamel::ConcurrentQueue<Message>& send_queue)
+	moodycamel::ConcurrentQueue<Event_handle*>& receive_queue,
+	moodycamel::ConcurrentQueue<Event_handle*>& send_queue)
 {
-	Message message;
-
 	while (run_flag)
 	{
-		while (receive_queue.try_dequeue(message))
+		Event_handle* pEvent = NULL;
+
+		while (receive_queue.try_dequeue(pEvent))
 		{
-			if(message.data.size())
+			if (pEvent->buffer.len)
 			{
-				send_queue.enqueue(move(message));
+				send_queue.enqueue(pEvent);
+			}
+			else
+			{
+				//长度为0，表示pEvent->socket连接关闭，销毁该事件对象
+				server_handle.Destory_Event_handle(pEvent);
 			}
 		}
 
-		this_thread::sleep_for(chrono::milliseconds(10));
+		this_thread::sleep_for(chrono::milliseconds(5));
 	}
 }
