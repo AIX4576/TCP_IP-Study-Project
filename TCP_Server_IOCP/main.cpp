@@ -27,7 +27,7 @@ int main()
 	vector<moodycamel::ConcurrentQueue<Event_handle*>> send_queues;
 	receive_queues.reserve(Application_Threads_Number);
 	send_queues.reserve(Application_Threads_Number);
-	for (uint32_t i = 0; i < Application_Threads_Number; i++)
+	for (size_t i = 0; i < Application_Threads_Number; i++)
 	{
 		receive_queues.emplace_back();
 		send_queues.emplace_back();
@@ -41,22 +41,22 @@ int main()
 	list<thread> thread_pool;
 
 	//iocp工作线程
-	for (uint32_t i = 0; i < Worker_Threads_Number; i++)
+	for (size_t i = 0; i < Worker_Threads_Number; i++)
 	{
 		thread_pool.emplace_back(work_thread, ref(run_flag), ref(server_handle), ref(receive_queues));
 	}
 
 	//iocp发送线程
-	for (uint32_t i = 0; i < Send_Threads_Number; i++)
+	for (size_t i = 0; i < Send_Threads_Number; i++)
 	{
-		thread_pool.emplace_back(send_thread, ref(run_flag), ref(server_handle), ref(send_queues));
+		thread_pool.emplace_back(send_thread, ref(run_flag), ref(server_handle), ref(send_queues), i);
 	}
 
 	//iocp清理线程
-	thread_pool.emplace_back(clean_thread, ref(run_flag), ref(server_handle));
+	thread_pool.emplace_back(guard_thread, ref(run_flag), ref(server_handle));
 
 	//应用线程
-	for (uint32_t i = 0; i < Application_Threads_Number; i++)
+	for (size_t i = 0; i < Application_Threads_Number; i++)
 	{
 		thread_pool.emplace_back(application_thread, ref(run_flag), ref(server_handle), ref(receive_queues.at(i)), ref(send_queues.at(i)));
 	}
@@ -71,9 +71,9 @@ int main()
 		}
 		else if (c == 'i')
 		{
+			shared_lock<shared_mutex> shared_lock{ server_handle.smutex };
 			cout << "=====================================================================" << endl;
 			cout << "total clients number is " << server_handle.client_handles.size() << endl;
-			cout << "connected clients number is " << server_handle.client_handles.size() - Worker_Threads_Number << endl;
 			cout << "=====================================================================" << endl;
 		}
 	}

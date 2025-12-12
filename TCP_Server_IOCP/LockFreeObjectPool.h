@@ -1,5 +1,4 @@
 ﻿#pragma once
-#include<iostream>
 #include<atomic>
 
 #include"boost/pool/object_pool.hpp"
@@ -47,8 +46,13 @@ public:
 		//如果队列中没有空闲对象，则从对象池中分配新对象
 		if (result == false)
 		{
-			lock.test_and_set(std::memory_order_acquire);
+			while (lock.test_and_set(std::memory_order_acquire))
+			{
+				std::this_thread::yield(); // 等待锁释放
+			}
+
 			p = object_pool.malloc();//此时可能会触发扩容
+
 			lock.clear(std::memory_order_release);
 		}
 
@@ -72,8 +76,13 @@ public:
 		bool result = free_object_queue.enqueue(p);
 		if (result == false)
 		{
-			lock.test_and_set(std::memory_order_acquire);
+			while (lock.test_and_set(std::memory_order_acquire))
+			{
+				std::this_thread::yield(); // 等待锁释放
+			}
+
 			object_pool.free(p);
+
 			lock.clear(std::memory_order_release);
 		}
 	}
@@ -84,4 +93,3 @@ private:
 	boost::object_pool<T> object_pool;
 	moodycamel::ConcurrentQueue<T*> free_object_queue;
 };
-

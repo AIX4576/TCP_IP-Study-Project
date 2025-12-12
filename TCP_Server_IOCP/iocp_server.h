@@ -2,12 +2,11 @@
 #include<iostream>
 #include<thread>
 #include<chrono>
-#include<list>
 #include<string>
-#include<unordered_map>
-#include<mutex>
+#include<vector>
 #include<shared_mutex>
 #include<atomic>
+#include<memory>
 using namespace std;
 
 #include"folly/container/F14Map.h"
@@ -70,7 +69,7 @@ public:
 	WSABUF buffer{};//WSARecv()和WSASend()要用到
 	char data[Event_Buffer_Size];//数据缓冲区
 
-	Event_handle(size_t id = 0, size_t pool_index = 0) : socket(INVALID_SOCKET), event(Event_None), id(id)
+	Event_handle(size_t id = 0) : socket(INVALID_SOCKET), event(Event_None), id(id)
 	{
 		buffer.buf = data;
 		buffer.len = Event_Buffer_Size;
@@ -98,6 +97,7 @@ public:
 			buffer.buf = data;
 			memcpy(data, other.data, Event_Buffer_Size);
 			swap(id, other.id);
+			swap(pool_index, other.pool_index);
 		}
 	}
 	Event_handle& operator=(Event_handle&& other) noexcept
@@ -113,6 +113,7 @@ public:
 			buffer.buf = data;
 			memcpy(data, other.data, Event_Buffer_Size);
 			swap(id, other.id);
+			swap(pool_index, other.pool_index);
 		}
 
 		return *this;
@@ -357,8 +358,8 @@ public:
 			}
 
 			pEvent_array[count++] = pair.second;
+			unordered_data.erase(pair.first);
 		}
-		unordered_data.clear();
 
 		lock.clear(memory_order_release);
 
@@ -465,5 +466,5 @@ private:
 };
 
 void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& receive_queues);
-void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& send_queues);
-void clean_thread(bool& run_flag, Server_Handle& server_handle);
+void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& send_queues, size_t index);
+void guard_thread(bool& run_flag, Server_Handle& server_handle);

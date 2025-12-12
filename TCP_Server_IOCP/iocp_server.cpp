@@ -462,7 +462,6 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					Client_Handle& client_handle_new = it->second;
 
 					//发送一个空数据的event_handle给业务层，表示连接已断开
-					size_t queue_index = server_handle.Socket_Map_In_Range(client_handle_new.socket, receive_queues.size());
 					Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
 						client_handle_new.socket,
 						Event_Receive,
@@ -614,17 +613,32 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 	}
 }
 
-void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& send_queues)
+void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& send_queues, size_t index)
 {
+	if (Application_Threads_Number % Send_Threads_Number)
+	{
+		cout << "Error: Application_Threads_Number must be divisible by Send_Threads_Number" << endl;
+		return;
+	}
+
+	int responsibled_queues_number = Application_Threads_Number / Send_Threads_Number;
+	int start_queue_index = (int)index * responsibled_queues_number;
+	int end_queue_index = start_queue_index + responsibled_queues_number - 1;
+
 	while (run_flag)
 	{
-		auto it = send_queues.begin();
-		while (it != send_queues.end())
+		for (int i = start_queue_index; i <= end_queue_index; i++)
 		{
+			if (i >= (int)send_queues.size())
+			{
+				break;
+			}
+
+			moodycamel::ConcurrentQueue<Event_handle*>& send_queue = send_queues.at(i);
 			Event_handle* pEvent = NULL;
 			size_t count = 0;
 
-			while (it->try_dequeue(pEvent))
+			while (send_queue.try_dequeue(pEvent))
 			{
 				if ((pEvent->buffer.len == 0) || (pEvent->buffer.len > Event_Buffer_Size))
 				{
@@ -634,14 +648,14 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 				shared_lock<shared_mutex> shared_lock{ server_handle.smutex };
 
-				auto it1 = server_handle.client_handles.find(pEvent->socket);
-				if (it1 == server_handle.client_handles.end())
+				auto it = server_handle.client_handles.find(pEvent->socket);
+				if (it == server_handle.client_handles.end())
 				{
 					server_handle.Destory_Event_handle(pEvent);
 					continue;
 				}
 
-				Client_Handle& client_handle = it1->second;
+				Client_Handle& client_handle = it->second;
 
 				if (client_handle.socket_status != Socket_Connected)
 				{
@@ -677,15 +691,13 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					break;
 				}
 			}
-
-			it++;
 		}
 
 		this_thread::sleep_for(chrono::milliseconds(1));
 	}
 }
 
-void clean_thread(bool& run_flag, Server_Handle& server_handle)
+void guard_thread(bool& run_flag, Server_Handle& server_handle)
 {
 	auto last_scan_time = chrono::system_clock::now();
 
@@ -696,10 +708,59 @@ void clean_thread(bool& run_flag, Server_Handle& server_handle)
 		if (chrono::duration_cast<chrono::seconds>(current_time - last_scan_time).count() > Client_Active_Timeout_Scan_Interval)
 		{
 			last_scan_time = current_time;
-
-			
 		}
 
-		this_thread::sleep_for(chrono::seconds(3));
+		{
+			shared_lock<shared_mutex> shared_lock{ server_handle.smutex };
+			if ((server_handle.client_handles.size() < Worker_Threads_Number) && (server_handle.Get_Socket_Server() != INVALID_SOCKET))
+			{
+				shared_lock.unlock();
+
+				unique_lock<shared_mutex> unique_lock{ server_handle.smutex };
+				size_t count = 0;
+
+				while ((server_handle.client_handles.size() < Worker_Threads_Number) && (count < Worker_Threads_Number))
+				{
+					Client_Handle temp_client{ &server_handle };
+					if (temp_client.socket == INVALID_SOCKET)
+					{
+						break;
+					}
+
+					Event_handle* pEvent = server_handle.Construct_Event_handle(temp_client.socket, Event_Accept_Connect);
+					if (pEvent == NULL)
+					{
+						break;
+					}
+
+					server_handle.client_handles.emplace(temp_client.socket, move(temp_client));
+
+					Client_Handle& client_handle = server_handle.client_handles.at(pEvent->socket);
+
+					int ret = 0;
+					int error = 0;
+					ret = AcceptEx(
+						server_handle.Get_Socket_Server(),
+						client_handle.socket,
+						client_handle.output_buffer,
+						Receive_Data_Length,// 不立即收数据
+						Local_Address_Length,
+						Remote_Address_Length,
+						NULL,// 不需要立即返回字节数
+						(LPOVERLAPPED)pEvent);
+
+					error = WSAGetLastError();
+					if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
+					{
+						server_handle.client_handles.erase(client_handle.socket);
+						server_handle.Destory_Event_handle(pEvent);
+					}
+
+					count++;
+				}
+			}
+		}
+
+		this_thread::sleep_for(chrono::milliseconds(100));
 	}
 }
