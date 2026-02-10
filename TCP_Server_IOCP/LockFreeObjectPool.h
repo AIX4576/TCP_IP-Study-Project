@@ -13,7 +13,7 @@ public:
 	LockFreeObjectPool(size_t size = Default_Size)
 	{
 		object_pool.set_next_size(size);
-		for (int i = 0; i < size; i++)
+		for (size_t i = 0; i < size; i++)
 		{
 			T* p = object_pool.malloc();
 			if (p)
@@ -32,7 +32,7 @@ public:
 	LockFreeObjectPool& operator=(LockFreeObjectPool&&) = delete;
 	~LockFreeObjectPool()
 	{
-		// object_pool 析构时自动释放所有内存
+		// object_pool 析构时自动释放所有内存，此时 free_object_queue 中存放的指针失效，但此时 LockFreeObjectPool 正在析构中，不会再使用这些指针
 	}
 
 	template<typename... Args>

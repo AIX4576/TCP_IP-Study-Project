@@ -29,8 +29,8 @@ int main()
 	send_queues.reserve(Application_Threads_Number);
 	for (size_t i = 0; i < Application_Threads_Number; i++)
 	{
-		receive_queues.emplace_back();
-		send_queues.emplace_back();
+		receive_queues.emplace_back(2048);
+		send_queues.emplace_back(2048);
 	}
 	cout << "work threads number is " << Worker_Threads_Number << endl;
 	cout << "send threads number is " << Send_Threads_Number << endl;
@@ -71,15 +71,13 @@ int main()
 		}
 		else if (c == 'i')
 		{
-			shared_lock<shared_mutex> shared_lock{ server_handle.smutex };
 			cout << "=====================================================================" << endl;
 			cout << "total clients number is " << server_handle.client_handles.size() << endl;
 			cout << "=====================================================================" << endl;
 		}
 	}
 
-	server_handle.Close_Socket();
-	this_thread::sleep_for(chrono::seconds(3));
+	server_handle.Close_Server();
 	run_flag = FALSE;
 
 	for (thread& item : thread_pool)

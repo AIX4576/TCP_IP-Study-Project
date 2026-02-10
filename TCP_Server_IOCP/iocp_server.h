@@ -27,7 +27,7 @@ using namespace std;
 #define Application_Threads_Number Threads_Number
 #define Worker_Threads_Number (Threads_Number / 2)
 #define Send_Threads_Number (Threads_Number / 2)
-#define Max_Clients_Number 1024
+#define Max_Clients_Number 16384
 
 #define Receive_Data_Length 0
 #define Local_Address_Length (sizeof(SOCKADDR_IN) + 16)
@@ -42,6 +42,7 @@ using namespace std;
 class Server_Handle;
 class Client_Handle;
 struct Event_handle;
+class Composite_Buffer_View;
 
 enum Socket_Status
 {
@@ -390,7 +391,6 @@ public:
 	{
 		if (socket != INVALID_SOCKET)
 		{
-			CancelIoEx((HANDLE)socket, NULL);
 			closesocket(socket);
 			socket = INVALID_SOCKET;
 		}
@@ -415,13 +415,21 @@ public:
 	{
 		return iocp;
 	}
-	void Close_Socket()
+	void Close_Server()
 	{
-		CancelIoEx((HANDLE)socket, NULL);
+		cout << "closing server ..." << endl;
 		closesocket(socket);
 		socket = INVALID_SOCKET;
+		this_thread::sleep_for(chrono::seconds(1));
+
+		cout << "closing all client sockets ..." << endl;
+		{
+			unique_lock<shared_mutex> unique_lock{ smutex };
+			client_handles.clear();
+		}
+		this_thread::sleep_for(chrono::seconds(3));
 	}
-	size_t Socket_Map_In_Range(SOCKET socket, size_t range)
+	size_t Socket_Map_In_Range(SOCKET socket, size_t range) const
 	{
 		if (range == 0)
 		{
@@ -462,7 +470,158 @@ private:
 	bool initialize_flag;
 	hash<SOCKET> hasher_socket;
 	hash<thread::id> hasher_thread_id;
+
+	/*
+	* p_event_handle_pools 构造出来的Event_handle对象去处分析：
+	* 1. 被Client_Handle::Receive_Data_Process()存储在Client_Handle的ordered_data或unordered_data中
+	* 2. 被投递进IOCP系统，等待异步操作完成
+	* 3. 在无锁接收队列中的Event_handle对象，会在业务层处理完数据后调用Server_Handle::Destory_Event_handle()销毁
+	* 4. 在无锁发送队列中的Event_handle对象，会在发送线程中被投递进IOCP系统，此时变为第2种情况
+	* 5. 在work_thread中从IOCP系统取出的Event_handle对象，会根据不同情况变为第1种、第3种情况或处理完后调用Server_Handle::Destory_Event_handle()销毁
+	* 
+	* 在第1和第2种情况下，容易忘记销毁Event_handle对象，导致内存泄漏
+	* 所以在Server_Handle对象析构前，必须销毁所有Client_Handle中ordered_data和unordered_data存储的Event_handle对象，
+	  并且取消所有异步IO操作，确保没有Event_handle对象在IOCP系统中等待，确保p_event_handle_pools没有内存泄漏
+	*/
 	vector<unique_ptr<LockFreeObjectPool<Event_handle>>> p_event_handle_pools;
+};
+
+class Composite_Buffer_View
+{
+public:
+	Composite_Buffer_View(Server_Handle& server_handle) : server_handle(server_handle) { event_vector_map.reserve(4); }
+	Composite_Buffer_View(const Composite_Buffer_View&) = delete;
+	Composite_Buffer_View(Composite_Buffer_View&&) = delete;
+	Composite_Buffer_View& operator=(const Composite_Buffer_View&) = delete;
+	Composite_Buffer_View& operator=(Composite_Buffer_View&&) = delete;
+	~Composite_Buffer_View()
+	{
+		clear();
+	}
+	void clear()
+	{
+		for (auto& pair : event_vector_map)
+		{
+			vector<Event_handle*>& event_vector = pair.second;
+			for (Event_handle* pEvent : event_vector)
+			{
+				server_handle.Destory_Event_handle(pEvent);
+			}
+		}
+		event_vector_map.clear();
+	}
+	void clear(SOCKET socket)
+	{
+		auto it = event_vector_map.find(socket);
+		if (it != event_vector_map.end())
+		{
+			vector<Event_handle*>& event_vector = it->second;
+			for (Event_handle* pEvent : event_vector)
+			{
+				server_handle.Destory_Event_handle(pEvent);
+			}
+
+			event_vector_map.erase(it);
+		}
+	}
+	void add_event_handle(Event_handle* pEvent)
+	{
+		if (pEvent->buffer.len == 0)
+		{
+			server_handle.Destory_Event_handle(pEvent);
+
+			return;
+		}
+
+		auto it = event_vector_map.find(pEvent->socket);
+		if (it != event_vector_map.end())
+		{
+			it->second.push_back(pEvent);
+		}
+		else
+		{
+			vector<Event_handle*> event_vector;
+			event_vector.reserve(8);
+			event_vector.push_back(pEvent);
+
+			event_vector_map.emplace(pEvent->socket, move(event_vector));
+		}
+	}
+	bool has_data() const
+	{
+		return !event_vector_map.empty();
+	}
+	vector<SOCKET> get_sockets() const
+	{
+		vector<SOCKET> sockets;
+		sockets.reserve(event_vector_map.size());
+
+		for (const auto& pair : event_vector_map)
+		{
+			sockets.push_back(pair.first);
+		}
+
+		return sockets;
+	}
+	string get_data(SOCKET socket)
+	{
+		string data;
+		size_t total_length = 0;
+
+		auto it = event_vector_map.find(socket);
+		if (it != event_vector_map.end())
+		{
+			vector<Event_handle*>& event_vector = it->second;
+			for (Event_handle* pEvent : event_vector)
+			{
+				total_length += pEvent->buffer.len;
+			}
+
+			data.reserve(total_length);
+
+			for (Event_handle* pEvent : event_vector)
+			{
+				data.append(pEvent->data, pEvent->buffer.len);
+			}
+		}
+
+		return data;
+	}
+	size_t get_data(SOCKET socket, size_t index, size_t get_size, char* buffer)
+	{
+		auto it = event_vector_map.find(socket);
+		size_t pointer = 0;
+		size_t accumulated_size = 0;
+
+		if (it != event_vector_map.end())
+		{
+			vector<Event_handle*>& event_vector = it->second;
+			for (Event_handle* pEvent : event_vector)
+			{
+				accumulated_size += pEvent->buffer.len;
+				if (index < accumulated_size)
+				{
+					size_t copy_size = min(get_size, accumulated_size - index);
+					size_t offset = pEvent->buffer.len - (accumulated_size - index);
+					memcpy(&buffer[pointer], &pEvent->data[offset], copy_size);
+
+					pointer += copy_size;
+					index += copy_size;
+					get_size -= copy_size;
+				}
+				if (get_size == 0)
+				{
+					break;
+				}
+			}
+		}
+
+		return pointer;
+	}
+
+private:
+	Server_Handle& server_handle;
+	folly::F14FastMap<SOCKET, vector<Event_handle*>> event_vector_map;
 };
 
 void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& receive_queues);

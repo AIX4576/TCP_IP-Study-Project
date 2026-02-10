@@ -126,7 +126,6 @@ Client_Handle::~Client_Handle()
 {
 	if (socket != INVALID_SOCKET)
 	{
-		CancelIoEx((HANDLE)socket, NULL);
 		closesocket(socket);
 		socket = INVALID_SOCKET;
 		socket_status = Socket_Invalid;
@@ -217,7 +216,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 							client_handle.Make_Receive_Event_id());
 						if (pEvent1 == NULL)
 						{
-							continue;
+							break;
 						}
 
 						int ret = 0;
@@ -238,6 +237,8 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 							cout << "Error: WSARecv() error code is " << error << endl;
 
 							server_handle.Destory_Event_handle(pEvent1);
+
+							break;
 						}
 						else
 						{
@@ -245,10 +246,10 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						}
 					}
 
-					if (count)
+					if (count == Per_Client_Receive_Event_Number)
 					{
 						client_handle.Connect_Deal();
-						cout << "client [" << (int)client_handle.socket << "] connected, ip is [" << client_handle.ip << "], port is [" << client_handle.port << "]" << endl;
+						//cout << "client [" << (int)client_handle.socket << "] connected, ip is [" << client_handle.ip << "], port is [" << client_handle.port << "]" << endl;
 					}
 					else
 					{
@@ -393,29 +394,23 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					unique_lock<shared_mutex> unique_lock{ server_handle.smutex };
 
 					it = server_handle.client_handles.find(pEvent->socket);
-					if (it == server_handle.client_handles.end())
+					if (it != server_handle.client_handles.end())
 					{
-						server_handle.Destory_Event_handle(pEvent);
+						//发送一个空数据的event_handle给业务层，表示连接已断开
+						size_t queue_index = server_handle.Socket_Map_In_Range(pEvent->socket, receive_queues.size());
+						Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
+							pEvent->socket,
+							Event_Receive,
+							0,
+							0);
+						if (pEvent_void_data)
+						{
+							receive_queues.at(queue_index).enqueue(pEvent_void_data);
+						}
 
-						break;
+						server_handle.client_handles.erase(it);
+						//cout << "client socket [" << (int)pEvent->socket << "] abnormal close" << endl;
 					}
-
-					Client_Handle& client_handle_new = it->second;
-
-					//发送一个空数据的event_handle给业务层，表示连接已断开
-					size_t queue_index = server_handle.Socket_Map_In_Range(client_handle_new.socket, receive_queues.size());
-					Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
-						client_handle_new.socket,
-						Event_Receive,
-						0,
-						0);
-					if (pEvent_void_data)
-					{
-						receive_queues.at(queue_index).enqueue(pEvent_void_data);
-					}
-
-					server_handle.client_handles.erase(pEvent->socket);
-					cout << "client socket [" << (int)pEvent->socket << "] abnormal close" << endl;
 
 					server_handle.Destory_Event_handle(pEvent);
 
@@ -449,31 +444,22 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					unique_lock<shared_mutex> unique_lock{ server_handle.smutex };
 
 					it = server_handle.client_handles.find(socket);
-					if (it == server_handle.client_handles.end())
+					if (it != server_handle.client_handles.end())
 					{
-						if (valid_data == false)
+						//发送一个空数据的event_handle给业务层，表示连接已断开
+						Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
+							socket,
+							Event_Receive,
+							0,
+							0);
+						if (pEvent_void_data)
 						{
-							server_handle.Destory_Event_handle(pEvent);
+							receive_queues.at(queue_index).enqueue(pEvent_void_data);
 						}
 
-						break;
+						server_handle.client_handles.erase(it);
+						cout << "client socket [" << (int)socket << "] unordered data number over threshold, close" << endl;
 					}
-
-					Client_Handle& client_handle_new = it->second;
-
-					//发送一个空数据的event_handle给业务层，表示连接已断开
-					Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
-						client_handle_new.socket,
-						Event_Receive,
-						0,
-						0);
-					if (pEvent_void_data)
-					{
-						receive_queues.at(queue_index).enqueue(pEvent_void_data);
-					}
-
-					server_handle.client_handles.erase(socket);
-					cout << "client socket [" << (int)socket << "] unordered data number over threshold, close" << endl;
 
 					if (valid_data == false)
 					{
@@ -482,6 +468,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 					break;
 				}
+
 				if (valid_data == false)
 				{
 					server_handle.Destory_Event_handle(pEvent);
@@ -513,7 +500,25 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				error = WSAGetLastError();
 				if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 				{
-					cout << "Error: WSARecv() error code is " << error << endl;
+					if (error == 10054) // 对端关闭了连接
+					{
+						if (shared_lock.owns_lock())
+						{
+							shared_lock.unlock();
+						}
+						unique_lock<shared_mutex> unique_lock{ server_handle.smutex };
+
+						it = server_handle.client_handles.find(pEvent_new->socket);
+						if (it != server_handle.client_handles.end())
+						{
+							server_handle.client_handles.erase(it);
+							cout << "client socket [" << (int)pEvent_new->socket << "] opposite close" << endl;
+						}
+					}
+					else
+					{
+						cout << "Error: WSARecv() error code is " << error << endl;
+					}
 
 					server_handle.Destory_Event_handle(pEvent_new);
 				}
@@ -521,20 +526,9 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 			break;
 			default:
 			{
-				shared_lock<shared_mutex> shared_lock{ server_handle.smutex };
+				unique_lock<shared_mutex> unique_lock{ server_handle.smutex };
 
-				auto it = server_handle.client_handles.find(pEvent->socket);
-				if (it != server_handle.client_handles.end())
-				{
-					if (shared_lock.owns_lock())
-					{
-						shared_lock.unlock();
-					}
-					unique_lock<shared_mutex> unique_lock{ server_handle.smutex };
-
-					server_handle.client_handles.erase(pEvent->socket);
-				}
-
+				server_handle.client_handles.erase(pEvent->socket);
 				server_handle.Destory_Event_handle(pEvent);
 			}
 			break;
@@ -572,7 +566,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				DWORD error2 = WSAGetLastError();
 
 				if ((bytes_transferred == 0) &&
-					((error1 == ERROR_OPERATION_ABORTED) || (error1 == ERROR_NETNAME_DELETED) || (error1 == ERROR_SUCCESS) || (error2 == WSAECONNRESET)))
+					((error1 == ERROR_OPERATION_ABORTED) || (error1 == ERROR_NETNAME_DELETED) || (error1 == ERROR_SUCCESS) || (error1 == ERROR_CONNECTION_ABORTED) || (error2 == WSAECONNRESET)))
 				{
 					if (shared_lock.owns_lock())
 					{
@@ -581,30 +575,28 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					unique_lock<shared_mutex> unique_lock{ server_handle.smutex };
 
 					it = server_handle.client_handles.find(pEvent->socket);
-					if (it == server_handle.client_handles.end())
+					if (it != server_handle.client_handles.end())
 					{
-						server_handle.Destory_Event_handle(pEvent);
+						Client_Handle& client_handle = it->second;
+						if (client_handle.socket_status == Socket_Connected)
+						{
+							//发送一个空数据的event_handle给业务层，表示连接已断开
+							size_t queue_index = server_handle.Socket_Map_In_Range(pEvent->socket, receive_queues.size());
+							Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
+								pEvent->socket,
+								Event_Receive,
+								0,
+								0);
+							if (pEvent_void_data)
+							{
+								receive_queues.at(queue_index).enqueue(pEvent_void_data);
+							}
+						}
 
-						continue;
+						//当socket对端断开连接或本端主动关闭时，所有与该socket相关的未完成的异步操作都会被系统强制完成，并通过完成端口（IOCP）机制通知应用程序
+						server_handle.client_handles.erase(it);
+						//cout << "client socket [" << (int)pEvent->socket << "] close" << endl;
 					}
-
-					Client_Handle& client_handle = it->second;
-
-					//发送一个空数据的event_handle给业务层，表示连接已断开
-					size_t queue_index = server_handle.Socket_Map_In_Range(client_handle.socket, receive_queues.size());
-					Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
-						client_handle.socket,
-						Event_Receive,
-						0,
-						0);
-					if (pEvent_void_data)
-					{
-						receive_queues.at(queue_index).enqueue(pEvent_void_data);
-					}
-
-					//当socket断开连接时，所有未完成的异步操作都会被系统强制完成，并通过完成端口（IOCP）机制通知应用程序
-					server_handle.client_handles.erase(pEvent->socket);
-					cout << "client socket [" << (int)pEvent->socket << "] close" << endl;
 				}
 
 				server_handle.Destory_Event_handle(pEvent);
@@ -627,6 +619,8 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 	while (run_flag)
 	{
+		bool busy_flag = false;
+
 		for (int i = start_queue_index; i <= end_queue_index; i++)
 		{
 			if (i >= (int)send_queues.size())
@@ -640,7 +634,7 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 			while (send_queue.try_dequeue(pEvent))
 			{
-				if ((pEvent->buffer.len == 0) || (pEvent->buffer.len > Event_Buffer_Size))
+				if ((pEvent->buffer.len == 0) || (pEvent->buffer.len > Event_Buffer_Size) || (server_handle.Get_Socket_Server() == INVALID_SOCKET))
 				{
 					server_handle.Destory_Event_handle(pEvent);
 					continue;
@@ -688,12 +682,17 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				count++;
 				if (count > 5)
 				{
+					busy_flag = true;
+
 					break;
 				}
 			}
 		}
 
-		this_thread::sleep_for(chrono::milliseconds(1));
+		if (busy_flag == false)
+		{
+			this_thread::sleep_for(chrono::milliseconds(1));
+		}
 	}
 }
 

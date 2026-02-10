@@ -15,18 +15,12 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="iocp_server.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="LockFreeObjectPool.h">
+    <ClInclude Include="application_layer.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="iocp_server.cpp">
+    <ClCompile Include="application_layer.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="override_new_delete.cpp">
