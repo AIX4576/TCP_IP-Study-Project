@@ -4,7 +4,7 @@ using namespace std;
 
 #include"iocp_server.h"
 
-__declspec(dllexport) void application_thread(bool& run_flag,
+void application_thread(bool& run_flag,
 	Server_Handle& server_handle,
 	moodycamel::ConcurrentQueue<Event_handle*>& receive_queue,
 	moodycamel::ConcurrentQueue<Event_handle*>& send_queue);

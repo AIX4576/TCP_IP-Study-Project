@@ -493,7 +493,7 @@ public:
 	Composite_Buffer_View(const Composite_Buffer_View&) = delete;
 	Composite_Buffer_View(Composite_Buffer_View&&) = delete;
 	Composite_Buffer_View& operator=(const Composite_Buffer_View&) = delete;
-	Composite_Buffer_View& operator=(Composite_Buffer_View&&) = delete;
+	Composite_Buffer_View& operator=(Composite_Buffer_View&& other) = delete;
 	~Composite_Buffer_View()
 	{
 		clear();
