@@ -38,7 +38,7 @@ public:
 	template<typename... Args>
 	T* Construct(Args&&... args)
 	{
-		T* p = NULL;
+		T* p = nullptr;
 
 		//先从空闲队列中取对象
 		bool result = free_object_queue.try_dequeue(p);
@@ -66,7 +66,7 @@ public:
 	}
 	void Destory(T* p)
 	{
-		if (p == NULL)
+		if (p == nullptr)
 		{
 			return;
 		}
@@ -87,6 +87,51 @@ public:
 		}
 	}
 
+	struct Deleter
+	{
+	public:
+		LockFreeObjectPool* pool{};
+		Deleter(LockFreeObjectPool* pool) :pool(pool) {}
+		void operator()(T* p) const
+		{
+			if (pool)
+			{
+				pool->Destory(p);
+			}
+		}
+	};
+
+	template<typename... Args>
+	std::unique_ptr<T, Deleter> Construct_Unique_Ptr(Args&&... args)
+	{
+		T* p = nullptr;
+
+		//先从空闲队列中取对象
+		bool result = free_object_queue.try_dequeue(p);
+
+		//如果队列中没有空闲对象，则从对象池中分配新对象
+		if (result == false)
+		{
+			while (lock.test_and_set(std::memory_order_acquire))
+			{
+				std::this_thread::yield(); // 等待锁释放
+			}
+
+			p = object_pool.malloc();//此时可能会触发扩容
+
+			lock.clear(std::memory_order_release);
+		}
+
+		//分配对象成功后，调用构造函数
+		if (p)
+		{
+			new(p) T(std::forward<Args>(args)...);
+		}
+
+		std::unique_ptr<T, Deleter> fp(p, Deleter{ this });
+
+		return fp;
+	}
 
 private:
 	std::atomic_flag lock{};
