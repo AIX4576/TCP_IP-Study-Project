@@ -12,7 +12,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Custom_Server", "Custom_Ser
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "public_component", "public_component", "{01907566-1F21-4D95-9D85-F13370C8C5E7}"
 	ProjectSection(SolutionItems) = preProject
-		include\public_component\LockFreeObjectPool.h = include\public_component\LockFreeObjectPool.h
+		include\public_component\ConcurrentObjectPool.h = include\public_component\ConcurrentObjectPool.h
 		include\public_component\ModuleHandle.h = include\public_component\ModuleHandle.h
 	EndProjectSection
 EndProject

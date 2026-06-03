@@ -69,7 +69,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	p_event_handle_pools.reserve(Threads_Number);
 	for (size_t i = 0; i < Threads_Number; i++)
 	{
-		p_event_handle_pools.emplace_back(make_unique<LockFreeObjectPool<Event_handle>>(Max_Clients_Number * 10 / Threads_Number));
+		p_event_handle_pools.emplace_back(make_unique<ConcurrentObjectPool<Event_handle>>(Max_Clients_Number * 10 / Threads_Number));
 	}
 	
 
@@ -108,7 +108,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 		if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 		{
 			client_handles.erase(client_handle.socket);
-			Destory_Event_handle(pEvent);
+			Destroy_Event_handle(pEvent);
 		}
 	}
 
@@ -140,13 +140,13 @@ Client_Handle::~Client_Handle()
 		count = Get_Ordered_Data(pEvent_array, sizeof(pEvent_array) / sizeof(Event_handle*));
 		for (size_t i = 0; i < count; i++)
 		{
-			pServer_Handle->Destory_Event_handle(pEvent_array[i]);
+			pServer_Handle->Destroy_Event_handle(pEvent_array[i]);
 		}
 
 		count = Get_Unordered_Data(pEvent_array, sizeof(pEvent_array) / sizeof(Event_handle*));
 		for (size_t i = 0; i < count; i++)
 		{
-			pServer_Handle->Destory_Event_handle(pEvent_array[i]);
+			pServer_Handle->Destroy_Event_handle(pEvent_array[i]);
 		}
 	}
 }
@@ -180,7 +180,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 			if (completion_key != (ULONG_PTR)&server_handle)
 			{
-				server_handle.Destory_Event_handle(pEvent);
+				server_handle.Destroy_Event_handle(pEvent);
 
 				continue;
 			}
@@ -194,7 +194,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				auto it = server_handle.client_handles.find(pEvent->socket);
 				if (it == server_handle.client_handles.end())
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 
 					break;
 				}
@@ -236,7 +236,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						{
 							cout << "Error: WSARecv() error code is " << error << endl;
 
-							server_handle.Destory_Event_handle(pEvent1);
+							server_handle.Destroy_Event_handle(pEvent1);
 
 							break;
 						}
@@ -307,17 +307,17 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 						{
 							server_handle.client_handles.erase(pEvent->socket);
-							server_handle.Destory_Event_handle(pEvent);
+							server_handle.Destroy_Event_handle(pEvent);
 						}
 					}
 					else
 					{
-						server_handle.Destory_Event_handle(pEvent);
+						server_handle.Destroy_Event_handle(pEvent);
 					}
 				}
 				else
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 				}
 			}
 			break;
@@ -328,7 +328,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				auto it = server_handle.client_handles.find(pEvent->socket);
 				if (it == server_handle.client_handles.end())
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 
 					break;
 				}
@@ -361,13 +361,13 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					unique_lock<shared_mutex> unique_lock{ server_handle.smutex };
 
 					server_handle.client_handles.erase(pEvent->socket);
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 				}
 			}
 			break;
 			case Event_Send:
 			{
-				server_handle.Destory_Event_handle(pEvent);
+				server_handle.Destroy_Event_handle(pEvent);
 			}
 			break;
 			case Event_Receive:
@@ -377,7 +377,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				auto it = server_handle.client_handles.find(pEvent->socket);
 				if (it == server_handle.client_handles.end())
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 
 					break;
 				}
@@ -412,7 +412,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						//cout << "client socket [" << (int)pEvent->socket << "] abnormal close" << endl;
 					}
 
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 
 					break;
 				}
@@ -463,7 +463,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 					if (valid_data == false)
 					{
-						server_handle.Destory_Event_handle(pEvent);
+						server_handle.Destroy_Event_handle(pEvent);
 					}
 
 					break;
@@ -471,7 +471,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 				if (valid_data == false)
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 				}
 
 				//继续投递异步recv请求
@@ -520,7 +520,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						cout << "Error: WSARecv() error code is " << error << endl;
 					}
 
-					server_handle.Destory_Event_handle(pEvent_new);
+					server_handle.Destroy_Event_handle(pEvent_new);
 				}
 			}
 			break;
@@ -529,7 +529,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				unique_lock<shared_mutex> unique_lock{ server_handle.smutex };
 
 				server_handle.client_handles.erase(pEvent->socket);
-				server_handle.Destory_Event_handle(pEvent);
+				server_handle.Destroy_Event_handle(pEvent);
 			}
 			break;
 			}
@@ -547,7 +547,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 				if (completion_key != (ULONG_PTR)&server_handle)
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 
 					continue;
 				}
@@ -557,7 +557,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				auto it = server_handle.client_handles.find(pEvent->socket);
 				if (it == server_handle.client_handles.end())
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 
 					continue;
 				}
@@ -599,7 +599,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					}
 				}
 
-				server_handle.Destory_Event_handle(pEvent);
+				server_handle.Destroy_Event_handle(pEvent);
 			}
 		}
 	}
@@ -636,7 +636,7 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 			{
 				if ((pEvent->buffer.len == 0) || (pEvent->buffer.len > Event_Buffer_Size) || (server_handle.Get_Socket_Server() == INVALID_SOCKET))
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 					continue;
 				}
 
@@ -645,7 +645,7 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				auto it = server_handle.client_handles.find(pEvent->socket);
 				if (it == server_handle.client_handles.end())
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 					continue;
 				}
 
@@ -653,7 +653,7 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 
 				if (client_handle.socket_status != Socket_Connected)
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 					continue;
 				}
 
@@ -676,7 +676,7 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				error = WSAGetLastError();
 				if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 				{
-					server_handle.Destory_Event_handle(pEvent);
+					server_handle.Destroy_Event_handle(pEvent);
 				}
 
 				count++;
@@ -752,7 +752,7 @@ void guard_thread(bool& run_flag, Server_Handle& server_handle)
 					if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
 					{
 						server_handle.client_handles.erase(client_handle.socket);
-						server_handle.Destory_Event_handle(pEvent);
+						server_handle.Destroy_Event_handle(pEvent);
 					}
 
 					count++;

@@ -13,7 +13,7 @@ using namespace std;
 #include"boost/circular_buffer.hpp"
 #include"concurrentqueue.h"
 
-#include"LockFreeObjectPool.h"
+#include"ConcurrentObjectPool.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include<WS2tcpip.h> //基础套接字API头文件
@@ -442,7 +442,7 @@ public:
 	Event_handle* Construct_Event_handle(Args&&... args)
 	{
 		size_t pool_index = hasher_thread_id(this_thread::get_id()) % p_event_handle_pools.size();
-		LockFreeObjectPool<Event_handle>& event_handle_pool = *(p_event_handle_pools.at(pool_index));
+		ConcurrentObjectPool<Event_handle>& event_handle_pool = *(p_event_handle_pools.at(pool_index));
 
 		Event_handle* p = event_handle_pool.Construct(forward<Args>(args)...);
 		if (p)
@@ -452,16 +452,16 @@ public:
 
 		return p;
 	}
-	void Destory_Event_handle(Event_handle* p)
+	void Destroy_Event_handle(Event_handle* p)
 	{
 		if (p == NULL)
 		{
 			return;
 		}
 
-		LockFreeObjectPool<Event_handle>& event_handle_pool = *(p_event_handle_pools.at(p->Get_pool_index()));
+		ConcurrentObjectPool<Event_handle>& event_handle_pool = *(p_event_handle_pools.at(p->Get_pool_index()));
 
-		event_handle_pool.Destory(p);
+		event_handle_pool.Destroy(p);
 	}
 
 private:
@@ -475,15 +475,15 @@ private:
 	* p_event_handle_pools 构造出来的Event_handle对象去处分析：
 	* 1. 被Client_Handle::Receive_Data_Process()存储在Client_Handle的ordered_data或unordered_data中
 	* 2. 被投递进IOCP系统，等待异步操作完成
-	* 3. 在无锁接收队列中的Event_handle对象，会在业务层处理完数据后调用Server_Handle::Destory_Event_handle()销毁
+	* 3. 在无锁接收队列中的Event_handle对象，会在业务层处理完数据后调用Server_Handle::Destroy_Event_handle()销毁
 	* 4. 在无锁发送队列中的Event_handle对象，会在发送线程中被投递进IOCP系统，此时变为第2种情况
-	* 5. 在work_thread中从IOCP系统取出的Event_handle对象，会根据不同情况变为第1种、第3种情况或处理完后调用Server_Handle::Destory_Event_handle()销毁
+	* 5. 在work_thread中从IOCP系统取出的Event_handle对象，会根据不同情况变为第1种、第3种情况或处理完后调用Server_Handle::Destroy_Event_handle()销毁
 	* 
 	* 在第1和第2种情况下，容易忘记销毁Event_handle对象，导致内存泄漏
 	* 所以在Server_Handle对象析构前，必须销毁所有Client_Handle中ordered_data和unordered_data存储的Event_handle对象，
 	  并且取消所有异步IO操作，确保没有Event_handle对象在IOCP系统中等待，确保p_event_handle_pools没有内存泄漏
 	*/
-	vector<unique_ptr<LockFreeObjectPool<Event_handle>>> p_event_handle_pools;
+	vector<unique_ptr<ConcurrentObjectPool<Event_handle>>> p_event_handle_pools;
 };
 
 class Composite_Buffer_View
@@ -505,7 +505,7 @@ public:
 			vector<Event_handle*>& event_vector = pair.second;
 			for (Event_handle* pEvent : event_vector)
 			{
-				server_handle.Destory_Event_handle(pEvent);
+				server_handle.Destroy_Event_handle(pEvent);
 			}
 		}
 		event_vector_map.clear();
@@ -518,7 +518,7 @@ public:
 			vector<Event_handle*>& event_vector = it->second;
 			for (Event_handle* pEvent : event_vector)
 			{
-				server_handle.Destory_Event_handle(pEvent);
+				server_handle.Destroy_Event_handle(pEvent);
 			}
 
 			event_vector_map.erase(it);
@@ -528,7 +528,7 @@ public:
 	{
 		if (pEvent->buffer.len == 0)
 		{
-			server_handle.Destory_Event_handle(pEvent);
+			server_handle.Destroy_Event_handle(pEvent);
 
 			return;
 		}
