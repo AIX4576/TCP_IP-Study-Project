@@ -88,6 +88,11 @@ public:
 		}
 	};
 
+	Deleter Get_Deleter()
+	{
+		return Deleter{ this };
+	}
+
 	template <typename... Args>
 	std::unique_ptr<T, Deleter> MakeUnique(Args &&...args)
 	{

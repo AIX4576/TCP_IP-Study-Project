@@ -1,8 +1,5 @@
 #include"custom_server_interface.h"
 #include"custom_server_thread.h"
-#include"iocp_server.h"
-#include"application.h"
-
 
 Custom_Server_Handle::Custom_Server_Handle(const string& name) : Module_Handle(name)
 {

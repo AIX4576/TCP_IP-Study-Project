@@ -59,7 +59,7 @@ void main_thread(Custom_Server_Handle& handle)
 		//应用线程
 		for (size_t i = 0; i < Application_Threads_Number; i++)
 		{
-			handle.thread_pool.emplace_back(application_thread, ref(handle.run_flag), ref(server_handle), ref(receive_queues.at(i)), ref(send_queues.at(i)));
+			handle.thread_pool.emplace_back(application_thread, ref(handle.run_flag), ref(receive_queues.at(i)), ref(send_queues.at(i)));
 		}
 	}
 
