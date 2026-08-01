@@ -154,7 +154,7 @@ public:
 
 	Client_Handle(Server_Handle* pServer_Handle) :socket(INVALID_SOCKET), socket_status(Socket_Invalid), pServer_Handle(pServer_Handle)
 	{
-		socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+		socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
 		if (socket != INVALID_SOCKET)
 		{
 			socket_status = Socket_Disconnected;
@@ -191,7 +191,7 @@ public:
 		{
 			if (socket != INVALID_SOCKET)
 			{
-				CancelIoEx((HANDLE)socket, NULL);
+				CancelIoEx((HANDLE)socket, nullptr);
 				closesocket(socket);
 				socket = INVALID_SOCKET;
 				socket_status = Socket_Invalid;
@@ -394,10 +394,10 @@ public:
 			closesocket(socket);
 			socket = INVALID_SOCKET;
 		}
-		if (iocp != NULL)
+		if (iocp != nullptr)
 		{
 			CloseHandle(iocp);
-			iocp = NULL;
+			iocp = nullptr;
 		}
 
 		initialize_flag = FALSE;
@@ -452,9 +452,35 @@ public:
 
 		return p;
 	}
+	template<typename... Args>
+	unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter> MakeUnique_Event_handle(Args&&... args)
+	{
+		size_t pool_index = hasher_thread_id(this_thread::get_id()) % p_event_handle_pools.size();
+		ConcurrentObjectPool<Event_handle>& event_handle_pool = *(p_event_handle_pools.at(pool_index));
+
+		unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter> p(event_handle_pool.MakeUnique(forward<Args>(args)...));
+		if (p)
+		{
+			p->Set_pool_index(pool_index);
+		}
+
+		return p;
+	}
+	unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter> MakeUnique_Event_handle(Event_handle* p)
+	{
+		if (p == nullptr)
+		{
+			return unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter>(nullptr, ConcurrentObjectPool<Event_handle>::Deleter{});
+		}
+
+		size_t pool_index = p->Get_pool_index();
+		ConcurrentObjectPool<Event_handle>& event_handle_pool = *(p_event_handle_pools.at(pool_index));
+
+		return unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter>(p, event_handle_pool.Get_Deleter());
+	}
 	void Destroy_Event_handle(Event_handle* p)
 	{
-		if (p == NULL)
+		if (p == nullptr)
 		{
 			return;
 		}
@@ -486,144 +512,6 @@ private:
 	vector<unique_ptr<ConcurrentObjectPool<Event_handle>>> p_event_handle_pools;
 };
 
-class Composite_Buffer_View
-{
-public:
-	Composite_Buffer_View(Server_Handle& server_handle) : server_handle(server_handle) { event_vector_map.reserve(4); }
-	Composite_Buffer_View(const Composite_Buffer_View&) = delete;
-	Composite_Buffer_View(Composite_Buffer_View&&) = delete;
-	Composite_Buffer_View& operator=(const Composite_Buffer_View&) = delete;
-	Composite_Buffer_View& operator=(Composite_Buffer_View&& other) = delete;
-	~Composite_Buffer_View()
-	{
-		clear();
-	}
-	void clear()
-	{
-		for (auto& pair : event_vector_map)
-		{
-			vector<Event_handle*>& event_vector = pair.second;
-			for (Event_handle* pEvent : event_vector)
-			{
-				server_handle.Destroy_Event_handle(pEvent);
-			}
-		}
-		event_vector_map.clear();
-	}
-	void clear(SOCKET socket)
-	{
-		auto it = event_vector_map.find(socket);
-		if (it != event_vector_map.end())
-		{
-			vector<Event_handle*>& event_vector = it->second;
-			for (Event_handle* pEvent : event_vector)
-			{
-				server_handle.Destroy_Event_handle(pEvent);
-			}
-
-			event_vector_map.erase(it);
-		}
-	}
-	void add_event_handle(Event_handle* pEvent)
-	{
-		if (pEvent->buffer.len == 0)
-		{
-			server_handle.Destroy_Event_handle(pEvent);
-
-			return;
-		}
-
-		auto it = event_vector_map.find(pEvent->socket);
-		if (it != event_vector_map.end())
-		{
-			it->second.push_back(pEvent);
-		}
-		else
-		{
-			vector<Event_handle*> event_vector;
-			event_vector.reserve(8);
-			event_vector.push_back(pEvent);
-
-			event_vector_map.emplace(pEvent->socket, move(event_vector));
-		}
-	}
-	bool has_data() const
-	{
-		return !event_vector_map.empty();
-	}
-	vector<SOCKET> get_sockets() const
-	{
-		vector<SOCKET> sockets;
-		sockets.reserve(event_vector_map.size());
-
-		for (const auto& pair : event_vector_map)
-		{
-			sockets.push_back(pair.first);
-		}
-
-		return sockets;
-	}
-	string get_data(SOCKET socket)
-	{
-		string data;
-		size_t total_length = 0;
-
-		auto it = event_vector_map.find(socket);
-		if (it != event_vector_map.end())
-		{
-			vector<Event_handle*>& event_vector = it->second;
-			for (Event_handle* pEvent : event_vector)
-			{
-				total_length += pEvent->buffer.len;
-			}
-
-			data.reserve(total_length);
-
-			for (Event_handle* pEvent : event_vector)
-			{
-				data.append(pEvent->data, pEvent->buffer.len);
-			}
-		}
-
-		return data;
-	}
-	size_t get_data(SOCKET socket, size_t index, size_t get_size, char* buffer)
-	{
-		auto it = event_vector_map.find(socket);
-		size_t pointer = 0;
-		size_t accumulated_size = 0;
-
-		if (it != event_vector_map.end())
-		{
-			vector<Event_handle*>& event_vector = it->second;
-			for (Event_handle* pEvent : event_vector)
-			{
-				accumulated_size += pEvent->buffer.len;
-				if (index < accumulated_size)
-				{
-					size_t copy_size = min(get_size, accumulated_size - index);
-					size_t offset = pEvent->buffer.len - (accumulated_size - index);
-					memcpy(&buffer[pointer], &pEvent->data[offset], copy_size);
-
-					pointer += copy_size;
-					index += copy_size;
-					get_size -= copy_size;
-				}
-				if (get_size == 0)
-				{
-					break;
-				}
-			}
-		}
-
-		return pointer;
-	}
-
-private:
-	Server_Handle& server_handle;
-	folly::F14FastMap<SOCKET, vector<Event_handle*>> event_vector_map;
-};
-
-void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& receive_queues);
+void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter>>>& receive_queues);
 void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& send_queues, size_t index);
 void guard_thread(bool& run_flag, Server_Handle& server_handle);

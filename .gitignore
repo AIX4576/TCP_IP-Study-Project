@@ -361,3 +361,8 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# 项目中的本地配置文件和目录
+build_config.json
+document/
+plans/

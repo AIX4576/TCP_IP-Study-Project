@@ -1,9 +1,9 @@
 ﻿#include"iocp_server.h"
 
-Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_flag(FALSE)
+Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(nullptr), initialize_flag(FALSE)
 {
 	//创建一个支持重叠IO的TCP套接字, WSASocket()函数是Windows系统专用的,socket()函数是跨平台的
-	socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+	socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
 	if (socket == INVALID_SOCKET)
 	{
 		cout << "Error: create server socket fail" << endl;
@@ -48,8 +48,8 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 	}
 
 	//创建完成端口
-	iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, Worker_Threads_Number);
-	if (iocp == NULL)
+	iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, Worker_Threads_Number);
+	if (iocp == nullptr)
 	{
 		cout << "Error: create iocp fail" << endl;
 		closesocket(socket);
@@ -83,7 +83,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 		}
 
 		Event_handle* pEvent = Construct_Event_handle(temp_client.socket, Event_Accept_Connect);
-		if (pEvent == NULL)
+		if (pEvent == nullptr)
 		{
 			continue;
 		}
@@ -101,7 +101,7 @@ Server_Handle::Server_Handle() :socket(INVALID_SOCKET), iocp(NULL), initialize_f
 			Receive_Data_Length,// 不立即收数据
 			Local_Address_Length,
 			Remote_Address_Length,
-			NULL,// 不需要立即返回字节数
+			nullptr,// 不需要立即返回字节数
 			(LPOVERLAPPED)pEvent);
 
 		error = WSAGetLastError();
@@ -151,18 +151,18 @@ Client_Handle::~Client_Handle()
 	}
 }
 
-void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& receive_queues)
+void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter>>>& receive_queues)
 {
 	DWORD bytes_transferred = 0;
 	ULONG_PTR completion_key = 0;
-	LPOVERLAPPED pOverlapped = NULL;
+	LPOVERLAPPED pOverlapped = nullptr;
 	bool result = 0;
 
 	while (run_flag)
 	{
 		bytes_transferred = 0;
 		completion_key = 0;
-		pOverlapped = NULL;
+		pOverlapped = nullptr;
 
 		result = GetQueuedCompletionStatus(
 			server_handle.Get_IOCP(),
@@ -214,7 +214,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 							Event_Receive,
 							Event_Buffer_Size,
 							client_handle.Make_Receive_Event_id());
-						if (pEvent1 == NULL)
+						if (pEvent1 == nullptr)
 						{
 							break;
 						}
@@ -225,10 +225,10 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 							client_handle.socket,
 							&pEvent1->buffer,					//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
 							1,									//上面数组的长度，通常为 1
-							NULL,								//实际接收到的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
+							nullptr,								//实际接收到的字节数（仅在同步操作成功时有效，异步操作时通常为 nullptr）
 							&pEvent1->flag,						//标志位（如 MSG_PARTIAL），通常设为 0
 							(LPWSAOVERLAPPED)pEvent1,
-							NULL								//接收完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
+							nullptr								//接收完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 nullptr
 						);
 
 						error = WSAGetLastError();
@@ -300,7 +300,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 							Receive_Data_Length,// 不立即收数据
 							Local_Address_Length,
 							Remote_Address_Length,
-							NULL,// 不需要立即返回字节数
+							nullptr,// 不需要立即返回字节数
 							(LPOVERLAPPED)pEvent);
 
 						error = WSAGetLastError();
@@ -349,7 +349,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					Receive_Data_Length,// 不立即收数据
 					Local_Address_Length,
 					Remote_Address_Length,
-					NULL,// 不需要立即返回字节数
+					nullptr,// 不需要立即返回字节数
 					(LPOVERLAPPED)pEvent);
 
 				if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
@@ -398,14 +398,14 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					{
 						//发送一个空数据的event_handle给业务层，表示连接已断开
 						size_t queue_index = server_handle.Socket_Map_In_Range(pEvent->socket, receive_queues.size());
-						Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
+						auto pEvent_void_data = server_handle.MakeUnique_Event_handle(
 							pEvent->socket,
 							Event_Receive,
 							0,
 							0);
 						if (pEvent_void_data)
 						{
-							receive_queues.at(queue_index).enqueue(pEvent_void_data);
+							receive_queues.at(queue_index).enqueue(move(pEvent_void_data));
 						}
 
 						server_handle.client_handles.erase(it);
@@ -429,7 +429,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				size_t queue_index = server_handle.Socket_Map_In_Range(client_handle.socket, receive_queues.size());
 				for (size_t i = 0; i < count; i++)
 				{
-					receive_queues.at(queue_index).enqueue(pEvent_array[i]);
+					receive_queues.at(queue_index).enqueue(server_handle.MakeUnique_Event_handle(pEvent_array[i]));
 				}
 
 				//若无序数据缓冲区中积压的接收事件序列号数量超过阈值，说明可能存在数据丢失，此时应关闭连接
@@ -447,14 +447,14 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					if (it != server_handle.client_handles.end())
 					{
 						//发送一个空数据的event_handle给业务层，表示连接已断开
-						Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
+						auto pEvent_void_data = server_handle.MakeUnique_Event_handle(
 							socket,
 							Event_Receive,
 							0,
 							0);
 						if (pEvent_void_data)
 						{
-							receive_queues.at(queue_index).enqueue(pEvent_void_data);
+							receive_queues.at(queue_index).enqueue(move(pEvent_void_data));
 						}
 
 						server_handle.client_handles.erase(it);
@@ -480,7 +480,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					Event_Receive,
 					Event_Buffer_Size,
 					client_handle.Make_Receive_Event_id());
-				if (pEvent_new == NULL)
+				if (pEvent_new == nullptr)
 				{
 					break;
 				}
@@ -491,10 +491,10 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					client_handle.socket,
 					&pEvent_new->buffer,			//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
 					1,							//上面数组的长度，通常为 1
-					NULL,						//实际接收到的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
+					nullptr,						//实际接收到的字节数（仅在同步操作成功时有效，异步操作时通常为 nullptr）
 					&pEvent_new->flag,				//标志位（如 MSG_PARTIAL），通常设为 0
 					(LPWSAOVERLAPPED)pEvent_new,
-					NULL						//接收完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
+					nullptr						//接收完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 nullptr
 				);
 
 				error = WSAGetLastError();
@@ -536,7 +536,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 		}
 		else
 		{
-			if (pOverlapped == NULL)
+			if (pOverlapped == nullptr)
 			{
 				// 超时了，没有任何任务完成
 			}
@@ -582,14 +582,14 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						{
 							//发送一个空数据的event_handle给业务层，表示连接已断开
 							size_t queue_index = server_handle.Socket_Map_In_Range(pEvent->socket, receive_queues.size());
-							Event_handle* pEvent_void_data = server_handle.Construct_Event_handle(
+							auto pEvent_void_data = server_handle.MakeUnique_Event_handle(
 								pEvent->socket,
 								Event_Receive,
 								0,
 								0);
 							if (pEvent_void_data)
 							{
-								receive_queues.at(queue_index).enqueue(pEvent_void_data);
+								receive_queues.at(queue_index).enqueue(move(pEvent_void_data));
 							}
 						}
 
@@ -629,7 +629,7 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 			}
 
 			moodycamel::ConcurrentQueue<Event_handle*>& send_queue = send_queues.at(i);
-			Event_handle* pEvent = NULL;
+			Event_handle* pEvent = nullptr;
 			size_t count = 0;
 
 			while (send_queue.try_dequeue(pEvent))
@@ -667,10 +667,10 @@ void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 					client_handle.socket,
 					&pEvent->buffer,			//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
 					1,							//上面数组的长度，通常为 1
-					NULL,						//实际发送的字节数（仅在同步操作成功时有效，异步操作时通常为 NULL）
+					nullptr,						//实际发送的字节数（仅在同步操作成功时有效，异步操作时通常为 nullptr）
 					0,							//发送标志（一般为 0）
 					(LPWSAOVERLAPPED)pEvent,
-					NULL						//发送完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 NULL
+					nullptr						//发送完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 nullptr
 				);
 
 				error = WSAGetLastError();
@@ -727,7 +727,7 @@ void guard_thread(bool& run_flag, Server_Handle& server_handle)
 					}
 
 					Event_handle* pEvent = server_handle.Construct_Event_handle(temp_client.socket, Event_Accept_Connect);
-					if (pEvent == NULL)
+					if (pEvent == nullptr)
 					{
 						break;
 					}
@@ -745,7 +745,7 @@ void guard_thread(bool& run_flag, Server_Handle& server_handle)
 						Receive_Data_Length,// 不立即收数据
 						Local_Address_Length,
 						Remote_Address_Length,
-						NULL,// 不需要立即返回字节数
+						nullptr,// 不需要立即返回字节数
 						(LPOVERLAPPED)pEvent);
 
 					error = WSAGetLastError();

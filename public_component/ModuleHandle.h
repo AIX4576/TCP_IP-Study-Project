@@ -4,7 +4,25 @@
 #include<string>
 #include<list>
 #include<mutex>
+#include<semaphore>
+#include<functional>
+#include<unordered_map>
 using namespace std;
+
+struct Event_Data
+{
+	uint64_t event_id;
+	string data;
+};
+
+using User_Callback = function<void(shared_ptr<Event_Data>, shared_ptr<void>)>;
+
+struct Callback_Entry
+{
+	User_Callback callback;
+	shared_ptr<void> user_data;
+	shared_ptr<Event_Data> event_data;
+};
 
 class Module_Handle
 {
@@ -39,7 +57,7 @@ public:
 	{
 		cout << "module \"" << name << "\" stop to run" << endl;
 
-		lock_guard<mutex> lock(mtx);
+		unique_lock<mutex> lock(mtx);
 
 		run_flag = false;
 		for (auto& item : thread_pool)
@@ -51,6 +69,19 @@ public:
 		}
 		thread_pool.clear();
 	}
+	void register_callback(uint64_t event_id, User_Callback callback, shared_ptr<void> user_data)
+	{
+		unique_lock<mutex> lock(callback_mtx);
+
+		// 创建回调条目
+		Callback_Entry entry{ move(callback), move(user_data) };
+
+		// 将条目添加到对应event_id的列表中
+		callback_map[event_id].push_back(entry);
+	}
 private:
-	
+    // 用于存储event_id及其对应的回调函数和用户数据的容器
+    unordered_map<uint64_t, list<Callback_Entry>> callback_map;
+    mutex callback_mtx;  // 专门用于保护callback_map的互斥锁
+
 };

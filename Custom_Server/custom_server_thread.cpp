@@ -2,6 +2,8 @@
 #include"iocp_server.h"
 #include"application.h"
 
+#include<semaphore>
+
 void main_thread(Custom_Server_Handle& handle)
 {
 	WORD version = MAKEWORD(2, 2);
@@ -23,22 +25,26 @@ void main_thread(Custom_Server_Handle& handle)
 		return;
 	}
 
-	//创建无锁并发队列
-	vector<moodycamel::ConcurrentQueue<Event_handle*>> receive_queues;
+	//创建无锁并发队列以及对应的计数信号量
+	vector<moodycamel::ConcurrentQueue<unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter>>> receive_queues;
 	vector<moodycamel::ConcurrentQueue<Event_handle*>> send_queues;
 	receive_queues.reserve(Application_Threads_Number);
 	send_queues.reserve(Application_Threads_Number);
+
+	
+
 	for (size_t i = 0; i < Application_Threads_Number; i++)
 	{
 		receive_queues.emplace_back(2048);
 		send_queues.emplace_back(2048);
 	}
+
 	cout << "work threads number is " << Worker_Threads_Number << endl;
 	cout << "send threads number is " << Send_Threads_Number << endl;
 	cout << "application threads number is " << Application_Threads_Number << endl;
 
 	{
-		lock_guard<mutex> lock(handle.mtx);
+		unique_lock<mutex> lock(handle.mtx);
 
 		//添加线程
 		//iocp工作线程
@@ -53,13 +59,13 @@ void main_thread(Custom_Server_Handle& handle)
 			handle.thread_pool.emplace_back(send_thread, ref(handle.run_flag), ref(server_handle), ref(send_queues), i);
 		}
 
-		//iocp清理线程
+		//iocp守护线程
 		handle.thread_pool.emplace_back(guard_thread, ref(handle.run_flag), ref(server_handle));
 
 		//应用线程
 		for (size_t i = 0; i < Application_Threads_Number; i++)
 		{
-			handle.thread_pool.emplace_back(application_thread, ref(handle.run_flag), ref(receive_queues.at(i)), ref(send_queues.at(i)));
+			handle.thread_pool.emplace_back(application_thread, ref(handle.run_flag), ref(server_handle), ref(receive_queues.at(i)), ref(send_queues.at(i)));
 		}
 	}
 

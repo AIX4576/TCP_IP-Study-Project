@@ -10,17 +10,6 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "main", "main\main.vcxproj",
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Custom_Server", "Custom_Server\Custom_Server.vcxproj", "{8AFF6898-8CE4-4270-A9ED-824F36FE8DB4}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "public_component", "public_component", "{01907566-1F21-4D95-9D85-F13370C8C5E7}"
-	ProjectSection(SolutionItems) = preProject
-		include\public_component\ConcurrentObjectPool.h = include\public_component\ConcurrentObjectPool.h
-		include\public_component\ModuleHandle.h = include\public_component\ModuleHandle.h
-	EndProjectSection
-EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "include", "include", "{A399662D-A5DD-4FEA-92F3-E05F3C07280B}"
-	ProjectSection(SolutionItems) = preProject
-		include\custom_server_interface.h = include\custom_server_interface.h
-	EndProjectSection
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -48,9 +37,6 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(NestedProjects) = preSolution
-		{01907566-1F21-4D95-9D85-F13370C8C5E7} = {A399662D-A5DD-4FEA-92F3-E05F3C07280B}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {E4178674-2E69-45FF-850F-E2357F854114}
