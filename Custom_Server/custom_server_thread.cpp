@@ -2,8 +2,6 @@
 #include"iocp_server.h"
 #include"application.h"
 
-#include<semaphore>
-
 void main_thread(Custom_Server_Handle& handle)
 {
 	WORD version = MAKEWORD(2, 2);
@@ -31,32 +29,37 @@ void main_thread(Custom_Server_Handle& handle)
 	receive_queues.reserve(Application_Threads_Number);
 	send_queues.reserve(Application_Threads_Number);
 
-	
+	vector<unique_ptr<counting_semaphore<>>> receive_semaphores;
+	vector<unique_ptr<counting_semaphore<>>> send_semaphores;
+	receive_semaphores.reserve(Application_Threads_Number);
+	send_semaphores.reserve(Application_Threads_Number);
 
 	for (size_t i = 0; i < Application_Threads_Number; i++)
 	{
 		receive_queues.emplace_back(2048);
 		send_queues.emplace_back(2048);
+		receive_semaphores.emplace_back(make_unique<counting_semaphore<>>(0));
+		send_semaphores.emplace_back(make_unique<counting_semaphore<>>(0));
 	}
 
 	cout << "work threads number is " << Worker_Threads_Number << endl;
-	cout << "send threads number is " << Send_Threads_Number << endl;
+	cout << "send threads number is " << Application_Threads_Number << endl;
 	cout << "application threads number is " << Application_Threads_Number << endl;
 
 	{
-		unique_lock<mutex> lock(handle.mtx);
+		unique_lock<mutex> lock(handle.thread_pool_mtx);
 
 		//添加线程
 		//iocp工作线程
 		for (size_t i = 0; i < Worker_Threads_Number; i++)
 		{
-			handle.thread_pool.emplace_back(work_thread, ref(handle.run_flag), ref(server_handle), ref(receive_queues));
+			handle.thread_pool.emplace_back(work_thread, ref(handle.run_flag), ref(server_handle), ref(receive_queues), ref(receive_semaphores));
 		}
 
 		//iocp发送线程
-		for (size_t i = 0; i < Send_Threads_Number; i++)
+		for (size_t i = 0; i < Application_Threads_Number; i++)
 		{
-			handle.thread_pool.emplace_back(send_thread, ref(handle.run_flag), ref(server_handle), ref(send_queues), i);
+			handle.thread_pool.emplace_back(send_thread, ref(handle.run_flag), ref(server_handle), ref(send_queues.at(i)), ref(*send_semaphores.at(i)));
 		}
 
 		//iocp守护线程
@@ -65,11 +68,11 @@ void main_thread(Custom_Server_Handle& handle)
 		//应用线程
 		for (size_t i = 0; i < Application_Threads_Number; i++)
 		{
-			handle.thread_pool.emplace_back(application_thread, ref(handle.run_flag), ref(server_handle), ref(receive_queues.at(i)), ref(send_queues.at(i)));
+			handle.thread_pool.emplace_back(application_thread, ref(handle.run_flag), ref(server_handle), ref(receive_queues.at(i)), ref(*receive_semaphores.at(i)), ref(send_queues.at(i)), ref(*send_semaphores.at(i)));
 		}
 	}
 
-	while (handle.run_flag)
+	while (handle.run_flag.load())
 	{
 		this_thread::sleep_for(chrono::milliseconds(200));
 	}

@@ -16,8 +16,9 @@ public:
 	Custom_Server_Handle& operator=(const Custom_Server_Handle&) = delete;
 	Custom_Server_Handle& operator=(Custom_Server_Handle&& other) = delete;
 	~Custom_Server_Handle() override;
-	void start_run() override;
-	void stop_run() override;
+protected:
+	void start_run_impl() override;
+	void stop_run_impl() override;
 };
 
 extern "C"

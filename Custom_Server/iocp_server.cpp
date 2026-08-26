@@ -151,14 +151,19 @@ Client_Handle::~Client_Handle()
 	}
 }
 
-void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter>>>& receive_queues)
+void work_thread(
+	atomic<bool>& run_flag,
+	Server_Handle& server_handle,
+	vector<moodycamel::ConcurrentQueue<unique_ptr<Event_handle,
+	ConcurrentObjectPool<Event_handle>::Deleter>>>& receive_queues,
+	vector<unique_ptr<counting_semaphore<>>>& receive_semaphores)
 {
 	DWORD bytes_transferred = 0;
 	ULONG_PTR completion_key = 0;
 	LPOVERLAPPED pOverlapped = nullptr;
 	bool result = 0;
 
-	while (run_flag)
+	while (run_flag.load())
 	{
 		bytes_transferred = 0;
 		completion_key = 0;
@@ -176,7 +181,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 		{
 			// 成功！我们可以继续处理这个完成的I/O任务
 
-			Event_handle* pEvent = (Event_handle*)pOverlapped;
+			Event_handle* pEvent = reinterpret_cast<Event_handle*>(pOverlapped);
 
 			if (completion_key != (ULONG_PTR)&server_handle)
 			{
@@ -406,6 +411,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						if (pEvent_void_data)
 						{
 							receive_queues.at(queue_index).enqueue(move(pEvent_void_data));
+							receive_semaphores.at(queue_index)->release();
 						}
 
 						server_handle.client_handles.erase(it);
@@ -431,6 +437,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 				{
 					receive_queues.at(queue_index).enqueue(server_handle.MakeUnique_Event_handle(pEvent_array[i]));
 				}
+				receive_semaphores.at(queue_index)->release(count);
 
 				//若无序数据缓冲区中积压的接收事件序列号数量超过阈值，说明可能存在数据丢失，此时应关闭连接
 				if (client_handle.Get_Unordered_Data_Number() > Per_Client_Unordered_Data_Number_Threshold)
@@ -455,6 +462,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 						if (pEvent_void_data)
 						{
 							receive_queues.at(queue_index).enqueue(move(pEvent_void_data));
+							receive_semaphores.at(queue_index)->release();
 						}
 
 						server_handle.client_handles.erase(it);
@@ -543,7 +551,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 			else
 			{
 				// 有任务完成但出错了，要根据错误码来处理，比如连接被断开等
-				Event_handle* pEvent = (Event_handle*)pOverlapped;
+				Event_handle* pEvent = reinterpret_cast<Event_handle*>(pOverlapped);
 
 				if (completion_key != (ULONG_PTR)&server_handle)
 				{
@@ -590,6 +598,7 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 							if (pEvent_void_data)
 							{
 								receive_queues.at(queue_index).enqueue(move(pEvent_void_data));
+								receive_semaphores.at(queue_index)->release();
 							}
 						}
 
@@ -605,102 +614,76 @@ void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel
 	}
 }
 
-void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& send_queues, size_t index)
+void send_thread(
+	atomic<bool>& run_flag,
+	Server_Handle& server_handle,
+	moodycamel::ConcurrentQueue<Event_handle*>& send_queue,
+	counting_semaphore<>& send_semaphore)
 {
-	if (Application_Threads_Number % Send_Threads_Number)
+	while (run_flag.load())
 	{
-		cout << "Error: Application_Threads_Number must be divisible by Send_Threads_Number" << endl;
-		return;
-	}
-
-	int responsibled_queues_number = Application_Threads_Number / Send_Threads_Number;
-	int start_queue_index = (int)index * responsibled_queues_number;
-	int end_queue_index = start_queue_index + responsibled_queues_number - 1;
-
-	while (run_flag)
-	{
-		bool busy_flag = false;
-
-		for (int i = start_queue_index; i <= end_queue_index; i++)
+		if (send_semaphore.try_acquire_for(chrono::milliseconds(500)) == false)
 		{
-			if (i >= (int)send_queues.size())
-			{
-				break;
-			}
-
-			moodycamel::ConcurrentQueue<Event_handle*>& send_queue = send_queues.at(i);
-			Event_handle* pEvent = nullptr;
-			size_t count = 0;
-
-			while (send_queue.try_dequeue(pEvent))
-			{
-				if ((pEvent->buffer.len == 0) || (pEvent->buffer.len > Event_Buffer_Size) || (server_handle.Get_Socket_Server() == INVALID_SOCKET))
-				{
-					server_handle.Destroy_Event_handle(pEvent);
-					continue;
-				}
-
-				shared_lock<shared_mutex> shared_lock{ server_handle.smutex };
-
-				auto it = server_handle.client_handles.find(pEvent->socket);
-				if (it == server_handle.client_handles.end())
-				{
-					server_handle.Destroy_Event_handle(pEvent);
-					continue;
-				}
-
-				Client_Handle& client_handle = it->second;
-
-				if (client_handle.socket_status != Socket_Connected)
-				{
-					server_handle.Destroy_Event_handle(pEvent);
-					continue;
-				}
-
-				//投递异步send请求
-				pEvent->buffer.buf = pEvent->data;
-				pEvent->event = Event_Send;
-
-				int ret = 0;
-				int error = 0;
-				ret = WSASend(
-					client_handle.socket,
-					&pEvent->buffer,			//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
-					1,							//上面数组的长度，通常为 1
-					nullptr,						//实际发送的字节数（仅在同步操作成功时有效，异步操作时通常为 nullptr）
-					0,							//发送标志（一般为 0）
-					(LPWSAOVERLAPPED)pEvent,
-					nullptr						//发送完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 nullptr
-				);
-
-				error = WSAGetLastError();
-				if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
-				{
-					server_handle.Destroy_Event_handle(pEvent);
-				}
-
-				count++;
-				if (count > 5)
-				{
-					busy_flag = true;
-
-					break;
-				}
-			}
+			continue;
 		}
 
-		if (busy_flag == false)
+		Event_handle* pEvent = nullptr;
+
+		if (send_queue.try_dequeue(pEvent))
 		{
-			this_thread::sleep_for(chrono::milliseconds(1));
+			if ((pEvent->buffer.len == 0) || (pEvent->buffer.len > Event_Buffer_Size) || (server_handle.Get_Socket_Server() == INVALID_SOCKET))
+			{
+				server_handle.Destroy_Event_handle(pEvent);
+				continue;
+			}
+
+			shared_lock<shared_mutex> shared_lock{ server_handle.smutex };
+
+			auto it = server_handle.client_handles.find(pEvent->socket);
+			if (it == server_handle.client_handles.end())
+			{
+				server_handle.Destroy_Event_handle(pEvent);
+				continue;
+			}
+
+			Client_Handle& client_handle = it->second;
+
+			if (client_handle.socket_status != Socket_Connected)
+			{
+				server_handle.Destroy_Event_handle(pEvent);
+				continue;
+			}
+
+			//投递异步send请求
+			pEvent->buffer.buf = pEvent->data;
+			pEvent->event = Event_Send;
+
+			int ret = 0;
+			int error = 0;
+			ret = WSASend(
+				client_handle.socket,
+				&pEvent->buffer,			//指向缓冲区数组的指针（一个 WSABUF 数组，至少有一项）
+				1,							//上面数组的长度，通常为 1
+				nullptr,						//实际发送的字节数（仅在同步操作成功时有效，异步操作时通常为 nullptr）
+				0,							//发送标志（一般为 0）
+				(LPWSAOVERLAPPED)pEvent,
+				nullptr						//发送完成后的回调函数（配合事件通知模型），IOCP 不用这个，设为 nullptr
+			);
+
+			error = WSAGetLastError();
+			if ((ret == SOCKET_ERROR) && (error != WSA_IO_PENDING))
+			{
+				server_handle.Destroy_Event_handle(pEvent);
+			}
 		}
 	}
 }
 
-void guard_thread(bool& run_flag, Server_Handle& server_handle)
+void guard_thread(atomic<bool>& run_flag, Server_Handle& server_handle)
 {
 	auto last_scan_time = chrono::system_clock::now();
 
-	while (run_flag)
+	while (run_flag.load())
 	{
 		//每 Client_Active_Timeout_Scan_Interval 秒遍历一次所有 client_handles ，把活动超时的socket断开连接，把socket status为invalid的client_handle清除
 		auto current_time = chrono::system_clock::now();

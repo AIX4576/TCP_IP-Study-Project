@@ -136,7 +136,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="main_interface.cpp" />
     <ClCompile Include="override_new_delete.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\modules_include\main_interface.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

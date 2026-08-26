@@ -10,23 +10,22 @@
 #include<windows.h>
 
 #include<iostream>
-#include<unordered_map>
 using namespace std;
 
 #include"ModuleHandle.h"
+#include"main_interface.h"
 #include"custom_server_interface.h"
 
 int main()
 {
-	unordered_map<string, unique_ptr<Module_Handle>> module_handles;
-	module_handles.reserve(16);
+	auto& main_handle = Main_Handle::instance();
 
 	Module_Handle* pCustom_Server_Handle = Initialize();
 	if (pCustom_Server_Handle)
 	{
-		module_handles.emplace(pCustom_Server_Handle->name, unique_ptr<Module_Handle>(pCustom_Server_Handle));
-		pCustom_Server_Handle->start_run();
+		main_handle.add_module(shared_ptr<Module_Handle>(pCustom_Server_Handle));
 	}
+	main_handle.start_run();	// 级联启动自身与全部模块
 
 	string command;
 	while (true)
@@ -38,12 +37,7 @@ int main()
 		}
 	}
 
-	auto it = module_handles.begin();
-	while (it != module_handles.end())
-	{
-		it->second->stop_run();
-		it++;
-	}
+	main_handle.stop_run();		// 级联停止全部模块与自身
 
 	return 0;
 }

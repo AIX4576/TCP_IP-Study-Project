@@ -7,6 +7,7 @@
 #include<shared_mutex>
 #include<atomic>
 #include<memory>
+#include<semaphore>
 using namespace std;
 
 #include"folly/container/F14Map.h"
@@ -24,9 +25,8 @@ using namespace std;
 #define Server_Port 8080
 
 #define Threads_Number (std::thread::hardware_concurrency())
-#define Application_Threads_Number Threads_Number
+#define Application_Threads_Number (Threads_Number / 2)
 #define Worker_Threads_Number (Threads_Number / 2)
-#define Send_Threads_Number (Threads_Number / 2)
 #define Max_Clients_Number 16384
 
 #define Receive_Data_Length 0
@@ -512,6 +512,15 @@ private:
 	vector<unique_ptr<ConcurrentObjectPool<Event_handle>>> p_event_handle_pools;
 };
 
-void work_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<unique_ptr<Event_handle, ConcurrentObjectPool<Event_handle>::Deleter>>>& receive_queues);
-void send_thread(bool& run_flag, Server_Handle& server_handle, vector<moodycamel::ConcurrentQueue<Event_handle*>>& send_queues, size_t index);
-void guard_thread(bool& run_flag, Server_Handle& server_handle);
+void work_thread(
+	atomic<bool>& run_flag,
+	Server_Handle& server_handle,
+	vector<moodycamel::ConcurrentQueue<unique_ptr<Event_handle,
+	ConcurrentObjectPool<Event_handle>::Deleter>>>& receive_queues,
+	vector<unique_ptr<counting_semaphore<>>>& receive_semaphores);
+void send_thread(
+	atomic<bool>& run_flag,
+	Server_Handle& server_handle,
+	moodycamel::ConcurrentQueue<Event_handle*>& send_queue,
+	counting_semaphore<>& send_semaphore);
+void guard_thread(atomic<bool>& run_flag, Server_Handle& server_handle);

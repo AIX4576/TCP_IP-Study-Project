@@ -24,7 +24,7 @@ Windows 平台基于 IOCP（I/O 完成端口）的高性能 TCP 服务器学习�
 - 参数 `Action` 必填（build/rebuild/clean）；`Configuration` 默认 Debug，`Platform` 默认 x64
 - 脚本依赖 `build_config.json`（**已 gitignore，不提交**），需手动创建，内容为 `MSBuild_path` 和 `solution_file` 两个字段。缺失或路径无效时脚本会输出模板并终止
 - 产物输出到 `library/`（Custom_Server.lib）和 `x64/`，MSBuild 日志在 `build.log`
-- 也可用 Visual Studio 直接打开 `TCP_IP学习项目.sln` 编译
+- 每次修改代码后必须执行构建来验证更改
 
 ### 项目配置约定
 
@@ -38,6 +38,8 @@ Windows 平台基于 IOCP（I/O 完成端口）的高性能 TCP 服务器学习�
 
 - `main/main.cpp` 是启动项目，运行时通过 `Initialize()`（`extern "C"` 导出函数）动态加载模块
 - 模块基类 `Module_Handle` 定义在 `public_component/ModuleHandle.h`，生命周期方法为 `start_run()` / `stop_run()`，所有派生类禁用拷贝/移动
+- **线程回收规则**：派生类重写 `stop_run_impl()` 回收 `thread_pool` 线程时，必须遵循收敛式回收——持锁仅换出线程快照、解锁后再 `join`，循环直至容器清空；**禁止持锁 join**（被 join 的线程若仍在创建其他线程并持有同一把锁，会形成死锁）
+- 主模块 `Main_Handle`（`modules_include/main_interface.h`，实现于 `main/main_interface.cpp`）是单例，托管全部业务模块句柄并级联启停，`main.cpp` 通过 `add_module()` 加载各模块，其他模块可通过 `instance()` 获取或动态增删模块
 - 模块接口头文件（如 `custom_server_interface.h`，声明 `Custom_Server_Handle` 和 `Initialize()`）集中放在 `modules_include/`，模块内部实现自行包含
 - 新增模块需遵循：接口头放入 `modules_include/`，编译为 DLL，导出 `Initialize()` 返回 `Module_Handle*`
 
@@ -60,4 +62,4 @@ Windows 平台基于 IOCP（I/O 完成端口）的高性能 TCP 服务器学习�
 
 - `build_config.json` 被 gitignore，但脚本运行必须存在，机器上未提交时需向用户说明并引导创建
 - README.md 记录了面向用户的目录结构与构建说明，修改目录结构时应同步更新
-- 本文件应随着工程开发而不断修改，并不是一成不变的。每次修改工程后应检查对应目录级和根目录的 `CLAUDE.md` 和 `README.md` 是否需要更新
+- 本文件应随着工程开发而不断修改，并不是一成不变的。每次git提交之前应检查对应目录级和根目录的 `CLAUDE.md` 和 `README.md` 是否需要更新

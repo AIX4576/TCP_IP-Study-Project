@@ -8,35 +8,37 @@ Custom_Server_Handle::~Custom_Server_Handle()
 {
 	stop_run();
 }
-void Custom_Server_Handle::start_run()
+void Custom_Server_Handle::start_run_impl()
 {
-	if (run_flag)
-	{
-		cout << "module \"" << name << "\" is already running" << endl;
-		return;
-	}
-
-	cout << "module \"" << name << "\" start to run override" << endl;
-
-	run_flag = true;
+	cout << "module \"" << name << "\" start_run_impl() override" << endl;
 
 	thread_pool.emplace_back(main_thread, ref(*this));
 }
-void Custom_Server_Handle::stop_run()
+void Custom_Server_Handle::stop_run_impl()
 {
-	cout << "module \"" << name << "\" stop to run override" << endl;
+	cout << "module \"" << name << "\" stop_run_impl() override" << endl;
 
-	lock_guard<mutex> lock(mtx);
-
-	run_flag = false;
-	for (auto& item : thread_pool)
+	// 收敛式回收（同基类规则）：持锁仅换出线程快照，解锁后 join，循环直至 thread_pool 清空。
+	// main_thread 创建业务线程时持有 thread_pool_mtx，若此处持锁 join 会与之死锁。
+	for (;;)
 	{
-		if (item.joinable())
+		list<thread> snapshot;
 		{
-			item.join();
+			unique_lock<mutex> lock(thread_pool_mtx);
+			snapshot.swap(thread_pool);
+		}
+		if (snapshot.empty())
+		{
+			break;
+		}
+		for (auto& item : snapshot)
+		{
+			if (item.joinable())
+			{
+				item.join();
+			}
 		}
 	}
-	thread_pool.clear();
 }
 
 Module_Handle* Initialize()
