@@ -19,7 +19,9 @@ void main_thread(Custom_Server_Handle& handle)
 	if (server_handle.Get_Initialize_Flag() == FALSE)
 	{
 		cout << "Error: server handle initialize fail" << endl;
-
+		// WSAStartup 已成功，离开前必须 WSACleanup 配对。单核下 Worker_Threads_Number 为 0，
+		// Server_Handle 无法投递任何 AcceptEx、initialize_flag 必为 FALSE，即走此分支——漏配对会泄漏 WSA 资源
+		WSACleanup();
 		return;
 	}
 
@@ -53,7 +55,7 @@ void main_thread(Custom_Server_Handle& handle)
 		//iocp工作线程
 		for (size_t i = 0; i < Worker_Threads_Number; i++)
 		{
-			handle.thread_pool.emplace_back(work_thread, ref(handle.run_flag), ref(server_handle), ref(receive_queues), ref(receive_semaphores));
+			handle.thread_pool.emplace_back(work_thread, ref(server_handle), ref(receive_queues), ref(receive_semaphores));
 		}
 
 		//iocp发送线程
@@ -78,6 +80,14 @@ void main_thread(Custom_Server_Handle& handle)
 	}
 
 	server_handle.Close_Server();
+
+	//事件流已断源（IOCP 排空完成）：向每条 receive_queue 投递 nullptr 哨兵，
+	//令 application_thread 排空积压后交接哨兵退出、send_thread 排空积压后退出
+	for (size_t i = 0; i < Application_Threads_Number; i++)
+	{
+		receive_queues.at(i).enqueue(nullptr);
+		receive_semaphores.at(i)->release();
+	}
 
 	WSACleanup();
 }
